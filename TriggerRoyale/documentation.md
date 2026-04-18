@@ -12,12 +12,14 @@ This repository currently contains the native Android MVP for the Kotlin vision 
   Draws debug detection rectangles in preview/screen coordinates.
 - `app/src/main/java/com/example/triggerroyale/ObjectDetectorHelper.kt`
   Wraps MediaPipe Object Detector setup and image-mode inference.
+- `app/src/main/java/com/example/triggerroyale/ImageEmbedderHelper.kt`
+  Wraps MediaPipe Image Embedder setup and one-shot embedding inference.
 - `app/src/main/java/com/example/triggerroyale/CoordinateMapper.kt`
   Utility for mapping between image-space and preview-space rectangles. It is currently kept for future use if preview and analysis spaces diverge again.
 - `app/src/main/java/com/example/triggerroyale/CropHelper.kt`
   Extracts person crops from the captured bitmap and rejects blurry crops using Laplacian variance.
 - `app/src/main/java/com/example/triggerroyale/VisionConfig.kt`
-  Central place for tunable detector settings such as model asset path, max results, and score threshold.
+  Central place for tunable detector/embedder settings such as model asset paths, max results, score threshold, and blur rejection options.
 - `app/src/main/res/layout/activity_main.xml`
   Defines the preview, debug detection overlay, crosshair overlay, and `SHOOT` button.
 - `app/build.gradle.kts`
@@ -66,6 +68,31 @@ When `SHOOT` is pressed:
 11. The crop is checked for blur using Laplacian variance.
 12. If the crop is blurry, the app shows `UNKNOWN – blurry frame`.
 13. If the crop is sharp enough, it is saved as a JPEG in the app-specific external files directory and the file path is logged.
+14. The non-blurry crop is embedded with MediaPipe Image Embedder.
+15. The app logs the embedding size and shows `Embedding OK – size <n>`.
+
+## Image embedding pipeline
+
+The project uses MediaPipe Image Embedder in `IMAGE` mode through `ImageEmbedderHelper`.
+
+Current embedder settings:
+
+- Model asset: `mobilenet_v3_small.tflite`
+- Quantize: `false`
+- L2 normalize: `true`
+- Running mode: `RunningMode.IMAGE`
+
+Important embedder note:
+
+- The embedder asset must be added manually to `app/src/main/assets/mobilenet_v3_small.tflite`.
+- `l2Normalize(true)` is intentionally enabled so cosine similarity can later be computed as a simple dot product.
+
+Embedding flow:
+
+1. A non-blurry crop is wrapped as an `MPImage`.
+2. MediaPipe produces one or more embeddings.
+3. The first float embedding is returned.
+4. The app logs the embedding vector size and shows a success toast.
 
 ## Coordinate spaces
 
@@ -121,6 +148,8 @@ These settings are centralized in `VisionConfig.kt`:
 
 - Detector model
   Change `detectorModelAssetPath` if you want to test a different MediaPipe-compatible object detection model.
+- Embedder model
+  Change `embedderModelAssetPath` if you want to test a different MediaPipe-compatible image embedding model.
 - Detector result count
   Change `detectorMaxResults`.
 - Detector confidence threshold
@@ -159,5 +188,6 @@ Flutter will eventually own UI composition and call into the Kotlin side through
 - Keep coordinate mapping centralized in `CoordinateMapper` so overlay rendering and future hit-testing cannot drift apart.
 - Keep one source of truth for tunable settings in `VisionConfig.kt` so experiments stay easy to reason about.
 - Keep crop extraction and blur scoring inside `CropHelper` so future embedding code can stay focused on identification.
+- Keep detection and embedding wrappers separate so model-specific MediaPipe details stay out of `MainActivity`.
 - If memory pressure becomes an issue later, profile before optimizing. The current goal is a working end-to-end loop, not a final performance pass.
 - If you add cropping, embedding, or server sync next, document where each stage runs and what coordinate space it expects.

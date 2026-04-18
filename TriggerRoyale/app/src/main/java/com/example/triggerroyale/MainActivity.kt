@@ -49,6 +49,9 @@ class MainActivity : AppCompatActivity() {
     /** MediaPipe detector helper. Created after camera permission is available. */
     private var objectDetectorHelper: ObjectDetectorHelper? = null
 
+    /** MediaPipe image embedder helper. Created during activity startup. */
+    private var imageEmbedderHelper: ImageEmbedderHelper? = null
+
     /**
      * Permission launcher for camera access.
      *
@@ -70,11 +73,17 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        initializeImageEmbedder()
 
         binding.shootButton.setOnClickListener {
             val detector = objectDetectorHelper
             if (detector == null) {
                 Toast.makeText(this, "Detector not ready", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            val embedder = imageEmbedderHelper
+            if (embedder == null) {
+                Toast.makeText(this, "Embedder not ready", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
@@ -142,6 +151,18 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 Log.d(TAG, "Saved debug crop to ${cropFile.absolutePath}")
+
+                val embedding = withContext(Dispatchers.Default) {
+                    val crop = CropHelper.cropPersonFromBitmap(frame, chosenHitBox)
+                    embedder.embed(crop)
+                }
+
+                Log.d(TAG, "Embedding size: ${embedding.size}")
+                Toast.makeText(
+                    this@MainActivity,
+                    "Embedding OK \u2013 size ${embedding.size}",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
 
@@ -159,6 +180,8 @@ class MainActivity : AppCompatActivity() {
         activityScope.cancel()
         objectDetectorHelper?.close()
         objectDetectorHelper = null
+        imageEmbedderHelper?.close()
+        imageEmbedderHelper = null
     }
 
     /** @return `true` when the app already has camera permission. */
@@ -219,6 +242,26 @@ class MainActivity : AppCompatActivity() {
         } catch (exception: Exception) {
             Log.e(TAG, "Failed to initialize object detector", exception)
             Toast.makeText(this, "Failed to initialize detector", Toast.LENGTH_SHORT).show()
+            null
+        }
+    }
+
+    /**
+     * Creates the image embedder once for the activity lifetime.
+     *
+     * Failures are surfaced through logs and a toast so missing or incompatible model assets are
+     * visible immediately during development.
+     */
+    private fun initializeImageEmbedder() {
+        if (imageEmbedderHelper != null) {
+            return
+        }
+
+        imageEmbedderHelper = try {
+            ImageEmbedderHelper(this)
+        } catch (exception: Exception) {
+            Log.e(TAG, "Failed to initialize image embedder", exception)
+            Toast.makeText(this, "Failed to initialize embedder", Toast.LENGTH_SHORT).show()
             null
         }
     }

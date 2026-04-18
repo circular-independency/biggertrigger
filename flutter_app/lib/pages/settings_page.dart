@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../components/cyber_input_field.dart';
 import '../components/cyber_theme.dart';
 import '../components/hud_background.dart';
 import '../components/settings_profile_card.dart';
+import '../logic/sound_manager.dart';
 import '../logic/user_preferences_manager.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -55,6 +58,7 @@ class _SettingsPageState extends State<SettingsPage> {
     if (!mounted) {
       return;
     }
+    unawaited(SoundManager.playDeny());
 
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
@@ -134,7 +138,10 @@ class _SettingsPageState extends State<SettingsPage> {
                                 letterSpacing: 1.0,
                               ),
                             ),
-                            onPressed: _saveUsername,
+                            onPressed: () {
+                              unawaited(SoundManager.playButton());
+                              unawaited(_saveUsername());
+                            },
                             child: const Text('SAVE USERNAME'),
                           ),
                         ],

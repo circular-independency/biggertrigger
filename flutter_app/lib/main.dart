@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'pages/end_game_page.dart';
 import 'pages/game_page.dart';
 import 'pages/lobby_page.dart';
 import 'pages/main_menu_page.dart';
@@ -17,6 +18,7 @@ class DragonHackApp extends StatelessWidget {
   static const String lobbyRoute = '/lobby';
   static const String settingsRoute = '/settings';
   static const String gameRoute = '/game';
+  static const String endGameRoute = '/endgame';
 
   @override
   Widget build(BuildContext context) {
@@ -34,6 +36,13 @@ class DragonHackApp extends StatelessWidget {
           final Object? args = ModalRoute.of(context)?.settings.arguments;
           final GameStartData? startData = args is GameStartData ? args : null;
           return GamePage(startData: startData);
+        },
+        endGameRoute: (context) {
+          final Object? args = ModalRoute.of(context)?.settings.arguments;
+          final String? username = args is Map
+              ? args['username']?.toString()
+              : null;
+          return EndGamePage(username: username);
         },
       },
     );

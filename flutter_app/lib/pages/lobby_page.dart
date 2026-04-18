@@ -1,8 +1,8 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../components/hud_background.dart';
@@ -127,6 +127,8 @@ class _LobbyPageState extends State<LobbyPage> {
       DragonHackApp.gameRoute,
       arguments: GameStartData(
         embeddingsByPlayer: payload.embeddingsByUser,
+        healthByPlayer: payload.healthByUser,
+        currentUsername: _currentUsername,
         socketManager: widget.socketManager,
       ),
     ).whenComplete(() {
@@ -327,6 +329,7 @@ class _LobbyPageState extends State<LobbyPage> {
       try {
         final XFile shot = await controller.takePicture();
         final Uint8List bytes = await shot.readAsBytes();
+        unawaited(SystemSound.play(SystemSoundType.click));
         if (!_isActiveRegistrationSession(token)) {
           return;
         }

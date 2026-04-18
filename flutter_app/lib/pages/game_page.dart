@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../components/cyber_theme.dart';
+import '../main.dart';
+import '../logic/sound_manager.dart';
 import '../logic/socket_manager.dart';
 import '../logic/vision_manager.dart';
 
@@ -21,10 +23,14 @@ enum GameCameraPermissionState {
 class GameStartData {
   const GameStartData({
     required this.embeddingsByPlayer,
+    required this.healthByPlayer,
+    required this.currentUsername,
     this.socketManager,
   });
 
   final Map<String, List<List<double>>> embeddingsByPlayer;
+  final Map<String, int> healthByPlayer;
+  final String currentUsername;
   final SocketManager? socketManager;
 }
 
@@ -62,6 +68,12 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
       <String, List<List<double>>>{};
   List<String> _playerIds = <String>[];
   SocketManager? _socketManager;
+  String _currentUsername = 'COMMANDER_01';
+  int _currentHp = 100;
+  bool _didHandleDeath = false;
+  StreamSubscription<Map<String, SocketLobbyUser>>? _usersSubscription;
+  bool _showDamageFlash = false;
+  Timer? _damageFlashTimer;
 
   bool get _isVisionPlatform =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
@@ -70,6 +82,8 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     _applyStartData(widget.startData);
+    _attachSocketListeners();
+    unawaited(SoundManager.playDeny());
     WidgetsBinding.instance.addObserver(this);
     unawaited(_configureGameScreen());
   }
@@ -90,6 +104,78 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
     _playerEmbeddingsByName = copied;
     _playerIds = copied.keys.toList(growable: false)..sort();
     _socketManager = startData.socketManager;
+    _currentUsername = startData.currentUsername.trim().isEmpty
+        ? 'COMMANDER_01'
+        : startData.currentUsername.trim();
+    _currentHp = (startData.healthByPlayer[_currentUsername] ?? 100).clamp(0, 100);
+  }
+
+  void _attachSocketListeners() {
+    final SocketManager? socketManager = _socketManager;
+    if (socketManager == null) {
+      return;
+    }
+
+    _usersSubscription = socketManager.usersUpdates.listen(
+      _handleUsersUpdate,
+    );
+  }
+
+  void _handleUsersUpdate(Map<String, SocketLobbyUser> users) {
+    final SocketLobbyUser? me = users[_currentUsername];
+    if (!mounted || me == null) {
+      return;
+    }
+
+    final int previousHp = _currentHp;
+    final int nextHp = me.hp.clamp(0, 100);
+    if (_currentHp != nextHp) {
+      setState(() {
+        _currentHp = nextHp;
+      });
+    }
+    if (nextHp < previousHp) {
+      _triggerDamageFlash();
+    }
+
+    if (!me.alive || nextHp <= 0) {
+      _handleDeath();
+    }
+  }
+
+  void _triggerDamageFlash() {
+    _damageFlashTimer?.cancel();
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _showDamageFlash = true;
+    });
+
+    _damageFlashTimer = Timer(const Duration(milliseconds: 170), () {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _showDamageFlash = false;
+      });
+    });
+  }
+
+  void _handleDeath() {
+    if (!mounted || _didHandleDeath) {
+      return;
+    }
+    _didHandleDeath = true;
+
+    Navigator.pushReplacementNamed(
+      context,
+      DragonHackApp.endGameRoute,
+      arguments: <String, dynamic>{
+        'username': _currentUsername,
+      },
+    );
   }
 
   Future<void> _sendHitToServer(String targetUser) async {
@@ -321,6 +407,10 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   }
 
   Future<void> _handleShootTap() async {
+    if (_currentHp <= 0) {
+      return;
+    }
+
     final DateTime now = DateTime.now();
     if (now.isBefore(_nextAllowedShootAt) || _isShootInFlight) {
       return;
@@ -407,6 +497,8 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _usersSubscription?.cancel();
+    _damageFlashTimer?.cancel();
     final CameraController? controller = _cameraController;
     _cameraController = null;
     _latestFrame = null;
@@ -480,6 +572,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
                           ),
                         ),
                         onPressed: () {
+                          unawaited(SoundManager.playButton());
                           Navigator.of(context).pop(false);
                         },
                         child: const Text('CANCEL'),
@@ -496,6 +589,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
                           ),
                         ),
                         onPressed: () {
+                          unawaited(SoundManager.playButton());
                           Navigator.of(context).pop(true);
                         },
                         child: const Text('QUIT'),
@@ -592,6 +686,15 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
               ),
             ),
           ),
+          IgnorePointer(
+            child: AnimatedOpacity(
+              opacity: _showDamageFlash ? 1 : 0,
+              duration: const Duration(milliseconds: 80),
+              child: Container(
+                color: const Color(0x55FF1A1A),
+              ),
+            ),
+          ),
           const IgnorePointer(child: _ScanlineOverlay()),
           SafeArea(
             child: Padding(
@@ -599,7 +702,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
-                  const _TopHudBar(),
+                  _TopHudBar(hpPercent: _currentHp),
                   const Spacer(),
                   const Spacer(),
                   _NotificationStack(notifications: _notifications),
@@ -712,6 +815,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
                         onPressed: requesting
                             ? null
                             : () {
+                                unawaited(SoundManager.playButton());
                                 unawaited(_requestCameraPermissionAgain());
                               },
                         child: Text(requesting ? 'REQUESTING...' : 'REQUEST AGAIN'),
@@ -728,6 +832,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
                           ),
                         ),
                         onPressed: () {
+                          unawaited(SoundManager.playButton());
                           unawaited(_openPermissionSettings());
                         },
                         child: const Text(
@@ -762,23 +867,26 @@ class GameNotification {
 }
 
 class _TopHudBar extends StatelessWidget {
-  const _TopHudBar();
+  const _TopHudBar({required this.hpPercent});
+
+  final int hpPercent;
 
   @override
   Widget build(BuildContext context) {
-    return const Align(
+    return Align(
       alignment: Alignment.topCenter,
-      child: _IntegrityBlock(),
+      child: _IntegrityBlock(hpPercent: hpPercent),
     );
   }
 }
 
 class _IntegrityBlock extends StatelessWidget {
-  const _IntegrityBlock();
+  const _IntegrityBlock({required this.hpPercent});
+
+  final int hpPercent;
 
   @override
   Widget build(BuildContext context) {
-    const int hpPercent = 60;
     const int totalBars = 10;
     final int activeBars = ((hpPercent / 100) * totalBars).round();
 
@@ -821,7 +929,7 @@ class _IntegrityBlock extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 12),
-          const Text(
+          Text(
             '$hpPercent%',
             style: TextStyle(
               color: CyberColors.lime,

@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'cyber_theme.dart';
+import '../logic/sound_manager.dart';
 
 class HudHeader extends StatelessWidget {
   const HudHeader({
@@ -94,7 +97,10 @@ class HudHeader extends StatelessWidget {
           ),
         ),
         IconButton(
-          onPressed: onSettingsTap,
+          onPressed: () {
+            unawaited(SoundManager.playButton());
+            onSettingsTap();
+          },
           iconSize: 30,
           color: CyberColors.cyan,
           icon: const Icon(Icons.settings_suggest_rounded),

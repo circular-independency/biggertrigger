@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'cyber_theme.dart';
+import '../logic/sound_manager.dart';
 
 class DeployPanel extends StatelessWidget {
   const DeployPanel({super.key, required this.onDeployTap});
@@ -20,7 +23,10 @@ class DeployPanel extends StatelessWidget {
         color: Colors.transparent,
         child: InkWell(
           borderRadius: BorderRadius.circular(16),
-          onTap: onDeployTap,
+          onTap: () {
+            unawaited(SoundManager.playButton());
+            onDeployTap();
+          },
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 42, horizontal: 28),
             child: Column(

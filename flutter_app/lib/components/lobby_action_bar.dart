@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'cyber_panel.dart';
 import 'cyber_theme.dart';
+import '../logic/sound_manager.dart';
 
 class LobbyActionBar extends StatelessWidget {
   const LobbyActionBar({
@@ -55,8 +58,16 @@ class LobbyActionBar extends StatelessWidget {
             color: Colors.transparent,
             child: InkWell(
               onTap: isReady
-                  ? (startEnabled ? onStartTap : null)
-                  : onReadyTap,
+                  ? (startEnabled
+                        ? () {
+                            unawaited(SoundManager.playButton());
+                            onStartTap();
+                          }
+                        : null)
+                  : () {
+                      unawaited(SoundManager.playButton());
+                      onReadyTap();
+                    },
               child: Ink(
                 decoration: BoxDecoration(
                   gradient: LinearGradient(

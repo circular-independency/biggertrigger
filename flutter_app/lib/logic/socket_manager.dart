@@ -29,9 +29,11 @@ class SocketLobbyUser {
 class SocketStartPayload {
   const SocketStartPayload({
     required this.embeddingsByUser,
+    required this.healthByUser,
   });
 
   final Map<String, List<List<double>>> embeddingsByUser;
+  final Map<String, int> healthByUser;
 }
 
 class SocketManager {
@@ -108,9 +110,17 @@ class SocketManager {
           );
           return;
         }
+        final dynamic rawHealth = decoded['health'];
+        if (rawHealth is! Map) {
+          _messagesController.addError(
+            StateError('Invalid start payload: health map is missing.'),
+          );
+          return;
+        }
 
         final Map<String, List<List<double>>> embeddingsByUser =
             <String, List<List<double>>>{};
+        final Map<String, int> healthByUser = <String, int>{};
         rawEmbeddings.forEach((dynamic key, dynamic value) {
           if (key is! String || value is! List) {
             return;
@@ -135,9 +145,18 @@ class SocketManager {
 
           embeddingsByUser[key] = parsedEmbeddings;
         });
+        rawHealth.forEach((dynamic key, dynamic value) {
+          if (key is! String || value is! num) {
+            return;
+          }
+          healthByUser[key] = value.toInt();
+        });
 
         _startController.add(
-          SocketStartPayload(embeddingsByUser: embeddingsByUser),
+          SocketStartPayload(
+            embeddingsByUser: embeddingsByUser,
+            healthByUser: healthByUser,
+          ),
         );
         break;
       default:

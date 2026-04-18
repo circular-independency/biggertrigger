@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
 import 'cyber_panel.dart';
 import 'cyber_theme.dart';
+import '../logic/sound_manager.dart';
 
 enum LobbyRegistrationOverlayStage {
   prompt,
@@ -266,7 +269,10 @@ class LobbyRegistrationOverlay extends StatelessWidget {
           foregroundColor: CyberColors.cyan,
           shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
         ),
-        onPressed: onTap,
+        onPressed: () {
+          unawaited(SoundManager.playButton());
+          onTap();
+        },
         child: Text(label),
       );
     }
@@ -278,7 +284,10 @@ class LobbyRegistrationOverlay extends StatelessWidget {
         foregroundColor: Colors.black,
         shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
       ),
-      onPressed: onTap,
+      onPressed: () {
+        unawaited(SoundManager.playButton());
+        onTap();
+      },
       child: Text(
         label,
         style: const TextStyle(fontWeight: FontWeight.w900),

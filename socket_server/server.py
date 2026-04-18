@@ -49,6 +49,10 @@ async def maybe_start_match():
         "embeddings": {
             name: info.get("embeddings", [])
             for name, info in users.items()
+        },
+        "health": {
+            name: info.get("hp", 0)
+            for name, info in users.items()
         }
     })
 

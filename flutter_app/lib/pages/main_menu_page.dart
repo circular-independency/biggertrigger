@@ -9,8 +9,44 @@ import '../components/info_tile.dart';
 import '../components/threat_tag.dart';
 import '../main.dart';
 
-class MainMenuPage extends StatelessWidget {
+class MainMenuPage extends StatefulWidget {
   const MainMenuPage({super.key});
+
+  @override
+  State<MainMenuPage> createState() => _MainMenuPageState();
+}
+
+class _MainMenuPageState extends State<MainMenuPage> {
+  String? _lastShownError;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final Object? args = ModalRoute.of(context)?.settings.arguments;
+    if (args is String && args.isNotEmpty && args != _lastShownError) {
+      _lastShownError = args;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) {
+          return;
+        }
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(
+            SnackBar(
+              behavior: SnackBarBehavior.floating,
+              backgroundColor: const Color(0xFF9B1C25),
+              content: Text(
+                args,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          );
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

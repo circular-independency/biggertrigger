@@ -12,7 +12,8 @@ async def broadcast():
         "data": {
             name: {
                 "hp": info["hp"],
-                "alive": info["alive"]
+                "alive": info["alive"],
+                "ready" : info["ready"]
             }
             for name, info in users.items()
         }
@@ -45,7 +46,8 @@ async def handler(ws):
                 users[username] = {
                     "ws": ws,
                     "hp": 100,
-                    "alive": True
+                    "alive": True,
+                    "ready": False
                 }
                 print("joined:", username)
                 print("all users:", users.keys())

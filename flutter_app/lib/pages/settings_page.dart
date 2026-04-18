@@ -7,10 +7,7 @@ import '../components/settings_profile_card.dart';
 import '../logic/user_preferences_manager.dart';
 
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key, UserPreferencesManager? preferencesManager})
-    : preferencesManager = preferencesManager ?? const UserPreferencesManager();
-
-  final UserPreferencesManager preferencesManager;
+  const SettingsPage({super.key} );
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -29,7 +26,7 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _loadUsername() async {
-    final String? username = await widget.preferencesManager.getUsername();
+    final String? username = await UserPreferencesManager.getUsername();
     if (!mounted) {
       return;
     }
@@ -54,7 +51,7 @@ class _SettingsPageState extends State<SettingsPage> {
       _errorMessage = null;
     });
 
-    await widget.preferencesManager.saveUsername(trimmed);
+    await UserPreferencesManager.saveUsername(trimmed);
     if (!mounted) {
       return;
     }

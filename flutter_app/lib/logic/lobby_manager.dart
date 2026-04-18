@@ -1,3 +1,5 @@
+import 'socket_manager.dart';
+
 enum LobbyStatus {
   pending,
   active,
@@ -41,34 +43,7 @@ class LobbyPlayer {
 class LobbyManager {
   LobbyStatus _status = LobbyStatus.pending;
 
-  final List<LobbyPlayer> _players = <LobbyPlayer>[
-    const LobbyPlayer(
-      name: 'COMMANDER_01',
-      status: 'WAITING',
-      statusType: LobbyPlayerStatusType.waiting,
-    ),
-    const LobbyPlayer(
-      name: 'GHOST_STALKER',
-      status: 'ONLINE',
-      statusType: LobbyPlayerStatusType.online,
-    ),
-    const LobbyPlayer(
-      name: 'NEON_VIPER',
-      status: 'WAITING',
-      statusType: LobbyPlayerStatusType.waiting,
-    ),
-    const LobbyPlayer(
-      name: 'CYBER_PUNK_88',
-      status: 'ONLINE',
-      statusType: LobbyPlayerStatusType.online,
-    ),
-    const LobbyPlayer(
-      name: 'EMPTY_SLOT',
-      status: 'SCANNING...',
-      statusType: LobbyPlayerStatusType.scanning,
-      isPlaceholder: true,
-    ),
-  ];
+  final List<LobbyPlayer> _players = <LobbyPlayer>[];
 
   LobbyStatus getCurrentStatus() => _status;
 
@@ -80,6 +55,51 @@ class LobbyManager {
       _players.where((LobbyPlayer p) => !p.isPlaceholder).length;
 
   int get totalOperativeSlots => 8;
+
+  void updatePlayersFromSocket(Map<String, SocketLobbyUser> users) {
+    final List<MapEntry<String, SocketLobbyUser>> sortedEntries =
+        users.entries.toList()..sort((a, b) => a.key.compareTo(b.key));
+
+    _players
+      ..clear()
+      ..addAll(
+        sortedEntries.map((MapEntry<String, SocketLobbyUser> entry) {
+          final SocketLobbyUser user = entry.value;
+          if (!user.alive) {
+            return LobbyPlayer(
+              name: entry.key,
+              status: 'DOWN',
+              statusType: LobbyPlayerStatusType.waiting,
+            );
+          }
+
+          if (user.ready) {
+            return LobbyPlayer(
+              name: entry.key,
+              status: 'LOCKED IN',
+              statusType: LobbyPlayerStatusType.lockedIn,
+            );
+          }
+
+          return LobbyPlayer(
+            name: entry.key,
+            status: 'WAITING',
+            statusType: LobbyPlayerStatusType.online,
+          );
+        }),
+      );
+
+    while (_players.length < totalOperativeSlots) {
+      _players.add(
+        const LobbyPlayer(
+          name: 'EMPTY_SLOT',
+          status: 'SCANNING...',
+          statusType: LobbyPlayerStatusType.scanning,
+          isPlaceholder: true,
+        ),
+      );
+    }
+  }
 
   void setReady() {
     _status = LobbyStatus.active;

@@ -29,7 +29,7 @@ ws.onmessage = (event) => {
       const li = document.createElement("li");
 
       const btn = document.createElement("button");
-      btn.textContent = `${name} (HP: ${info.hp}) (ALIVE: ${info.alive})`;
+      btn.textContent = `${name} (HP: ${info.hp}) (ALIVE: ${info.alive}) ${info.ready}`;
 
       btn.onclick = () => shoot(name);
 

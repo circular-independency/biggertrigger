@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../components/hud_background.dart';
@@ -26,10 +27,29 @@ class LobbyPage extends StatefulWidget {
 
 class _LobbyPageState extends State<LobbyPage> {
   bool _isConnecting = true;
+  bool _didNavigateAway = false;
+  StreamSubscription<Map<String, SocketLobbyUser>>? _usersSubscription;
+  StreamSubscription<String>? _messagesSubscription;
 
   @override
   void initState() {
     super.initState();
+    _usersSubscription = widget.socketManager.usersUpdates.listen(
+      (Map<String, SocketLobbyUser> users) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          widget.lobbyManager.updatePlayersFromSocket(users);
+        });
+      },
+    );
+    _messagesSubscription = widget.socketManager.messages.listen(
+      (_) {},
+      onError: (Object error) {
+        _goToHomeWithError(error);
+      },
+    );
     _connectSocket();
   }
 
@@ -43,20 +63,27 @@ class _LobbyPageState extends State<LobbyPage> {
         _isConnecting = false;
       });
     } catch (error) {
-      if (!mounted) {
-        return;
-      }
-      Navigator.pushNamedAndRemoveUntil(
-        context,
-        DragonHackApp.mainMenuRoute,
-        (Route<dynamic> route) => false,
-        arguments: 'Socket connection failed: $error',
-      );
+      _goToHomeWithError(error);
     }
+  }
+
+  void _goToHomeWithError(Object error) {
+    if (!mounted || _didNavigateAway) {
+      return;
+    }
+    _didNavigateAway = true;
+    Navigator.pushNamedAndRemoveUntil(
+      context,
+      DragonHackApp.mainMenuRoute,
+      (Route<dynamic> route) => false,
+      arguments: 'Socket connection failed: $error',
+    );
   }
 
   @override
   void dispose() {
+    _messagesSubscription?.cancel();
+    _usersSubscription?.cancel();
     widget.socketManager.disconnect();
     super.dispose();
   }

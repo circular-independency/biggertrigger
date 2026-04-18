@@ -14,6 +14,18 @@ abstract interface class SocketChannel {
   StreamSink<dynamic> get sink;
 }
 
+class SocketLobbyUser {
+  const SocketLobbyUser({
+    required this.hp,
+    required this.alive,
+    required this.ready,
+  });
+
+  final int hp;
+  final bool alive;
+  final bool ready;
+}
+
 class SocketManager {
   SocketManager({SocketChannelFactory? channelFactory, String? socketUrlIn})
     : _channelFactory = channelFactory ?? _defaultChannelFactory,
@@ -23,12 +35,13 @@ class SocketManager {
   // flutter run --dart-define SOCKET_URL=ws://<host>:8765
   static const String serverUrlOverride = String.fromEnvironment('SOCKET_URL');
 
-  
   String? _username;
   final SocketChannelFactory _channelFactory;
   final String _socketUrl;
   final StreamController<String> _messagesController =
       StreamController<String>.broadcast();
+  final StreamController<Map<String, SocketLobbyUser>> _usersController =
+      StreamController<Map<String, SocketLobbyUser>>.broadcast();
 
   StreamSubscription<dynamic>? _subscription;
   SocketChannel? _channel;
@@ -38,34 +51,75 @@ class SocketManager {
 
   Stream<String> get messages => _messagesController.stream;
 
+  Stream<Map<String, SocketLobbyUser>> get usersUpdates => _usersController.stream;
 
   void handleData(String strData) {
-    
-    final data = jsonDecode(strData);
-    print(data);
-
-    switch (data["type"]) {
-      case "join":
-
-        break;
-      case "hit":
-        
-        break;
+    final dynamic decoded = jsonDecode(strData);
+    if (decoded is! Map<String, dynamic>) {
+      return;
     }
 
+    final String? type = decoded['type'] as String?;
+    switch (type) {
+      case 'join':
+        break;
+      case 'users':
+        final dynamic rawUsers = decoded['data'];
+        if (rawUsers is! Map) {
+          return;
+        }
+
+
+        final Map<String, SocketLobbyUser> users = <String, SocketLobbyUser>{};
+        rawUsers.forEach((dynamic key, dynamic value) {
+          if (key is! String || value is! Map) {
+            return;
+          }
+
+          users[key] = SocketLobbyUser(
+            hp: _toInt(value['hp'], fallback: 100),
+            alive: _toBool(value['alive'], fallback: true),
+            ready: _toBool(value['ready'], fallback: false),
+          );
+        });
+
+        _usersController.add(users);
+        break;
+      case 'hit':
+        final String hitter = decoded['from']?.toString() ?? 'Unknown';
+        _messagesController.add('[$hitter] hit you');
+        break;
+      default:
+        break;
+    }
+  }
+
+  static int _toInt(dynamic value, {required int fallback}) {
+    if (value is int) {
+      return value;
+    }
+    if (value is num) {
+      return value.toInt();
+    }
+    return fallback;
+  }
+
+  static bool _toBool(dynamic value, {required bool fallback}) {
+    if (value is bool) {
+      return value;
+    }
+    return fallback;
   }
 
   Future<String> _getUsername() async {
-    _username ??= await UserPreferencesManager.getUsername() ?? "";
+    _username ??= await UserPreferencesManager.getUsername() ?? '';
     return _username!;
   }
-
 
   Future<void> connect() async {
     if (_isConnected) {
       return;
     }
-
 
     final Uri uri = Uri.parse(_socketUrl);
     final SocketChannel channel = _channelFactory(uri);
@@ -73,7 +127,11 @@ class SocketManager {
     _subscription = channel.stream.listen(
       (dynamic data) {
         if (data is String) {
-          handleData(data);
+          try {
+            handleData(data);
+          } catch (error, stackTrace) {
+            _messagesController.addError(error, stackTrace);
+          }
           return;
         }
         _messagesController.addError(
@@ -87,6 +145,9 @@ class SocketManager {
         _isConnected = false;
         _subscription = null;
         _channel = null;
+        _messagesController.addError(
+          StateError('Connection to server was lost.'),
+        );
       },
     );
 
@@ -96,12 +157,11 @@ class SocketManager {
       _channel = channel;
       _isConnected = true;
 
-      final message = jsonEncode({
+      final String message = jsonEncode(<String, dynamic>{
         'type': 'join',
         'username': _username,
       });
       send(message);
-
     } catch (error, stackTrace) {
       await _subscription?.cancel();
       _subscription = null;
@@ -111,8 +171,6 @@ class SocketManager {
       rethrow;
     }
   }
-
-
 
   void send(String message) {
     final SocketChannel? channel = _channel;
@@ -137,6 +195,7 @@ class SocketManager {
   Future<void> dispose() async {
     await disconnect();
     await _messagesController.close();
+    await _usersController.close();
   }
 
   static SocketChannel _defaultChannelFactory(Uri uri) {

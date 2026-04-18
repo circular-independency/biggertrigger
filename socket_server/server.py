@@ -6,7 +6,7 @@ from websockets.exceptions import ConnectionClosed
 
 SHOT_DAMAGE = 25
 SERVER_HOST = os.getenv("WS_HOST", "0.0.0.0")
-SERVER_PORT = int(os.getenv("WS_PORT", "8765"))
+SERVER_PORT = int(os.getenv("PORT", os.getenv("WS_PORT", "8765")))
 
 users = {}
 match_started = False

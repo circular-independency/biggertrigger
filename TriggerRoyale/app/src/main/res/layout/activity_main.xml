@@ -11,6 +11,11 @@
         app:implementationMode="performance"
         app:scaleType="fillCenter" />
 
+    <com.example.triggerroyale.DetectionOverlayView
+        android:id="@+id/detectionOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
     <com.example.triggerroyale.CrosshairOverlayView
         android:id="@+id/crosshairOverlay"
         android:layout_width="match_parent"

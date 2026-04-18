@@ -7,13 +7,12 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
-import kotlin.math.max
 
 /**
  * Debug overlay that renders object detection boxes on top of the camera preview.
  *
- * The incoming rectangles are provided in source-image coordinates. This view maps them onto the
- * screen using the same center-crop style scaling as the current `PreviewView` configuration.
+ * The incoming rectangles are already provided in preview/screen coordinates. This keeps the view
+ * simple and ensures the user sees the same geometry that the hit logic uses.
  */
 class DetectionOverlayView @JvmOverloads constructor(
     context: Context,
@@ -31,57 +30,29 @@ class DetectionOverlayView @JvmOverloads constructor(
         strokeWidth = strokeWidthPx
     }
 
-    /** Width of the source image the current detections were produced from. */
-    private var sourceImageWidth = 0
-
-    /** Height of the source image the current detections were produced from. */
-    private var sourceImageHeight = 0
-
-    /** Latest detection boxes in source-image pixel coordinates. */
+    /** Latest detection boxes in preview/screen coordinates. */
     private var detections: List<RectF> = emptyList()
 
     /**
      * Replaces the currently displayed detections.
      *
-     * @param imageWidth Width of the bitmap used for detection.
-     * @param imageHeight Height of the bitmap used for detection.
-     * @param boxes Detection boxes in bitmap pixel coordinates.
+     * @param boxes Detection boxes already mapped into preview/screen coordinates.
      */
-    fun setDetections(imageWidth: Int, imageHeight: Int, boxes: List<RectF>) {
-        sourceImageWidth = imageWidth
-        sourceImageHeight = imageHeight
+    fun setDetections(boxes: List<RectF>) {
         detections = boxes.map(::RectF)
         invalidate()
     }
 
-    /** Draws the currently stored detections mapped from bitmap space into view space. */
+    /** Draws the currently stored detection rectangles directly in screen space. */
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
-        if (sourceImageWidth <= 0 || sourceImageHeight <= 0 || detections.isEmpty()) {
+        if (detections.isEmpty()) {
             return
         }
 
-        // Match PreviewView's fill-center behavior by scaling until the full view is covered.
-        val scale = max(
-            width / sourceImageWidth.toFloat(),
-            height / sourceImageHeight.toFloat()
-        )
-        val scaledWidth = sourceImageWidth * scale
-        val scaledHeight = sourceImageHeight * scale
-        val offsetX = (width - scaledWidth) / 2f
-        val offsetY = (height - scaledHeight) / 2f
-
         detections.forEach { box ->
-            // Convert from source-image pixels into this overlay's on-screen coordinate system.
-            val mappedBox = RectF(
-                box.left * scale + offsetX,
-                box.top * scale + offsetY,
-                box.right * scale + offsetX,
-                box.bottom * scale + offsetY
-            )
-
-            canvas.drawRect(mappedBox, boxPaint)
+            canvas.drawRect(box, boxPaint)
         }
     }
 }

@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Matrix
+import android.graphics.PointF
+import android.graphics.RectF
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
@@ -25,6 +27,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.hypot
 
 /**
  * Temporary native test harness for the Kotlin vision module.
@@ -96,20 +99,58 @@ class MainActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
 
+            val previewWidth = binding.previewView.width
+            val previewHeight = binding.previewView.height
+            if (previewWidth <= 0 || previewHeight <= 0) {
+                Toast.makeText(this, "Preview not ready", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            // The crosshair overlay is centered in the preview, so the targeting point is simply
+            // the midpoint of the preview surface.
+            val crosshairCenter = PointF(previewWidth / 2f, previewHeight / 2f)
+
             activityScope.launch {
                 // Run ML work off the main thread to keep the UI responsive.
                 val personBoxes = withContext(Dispatchers.Default) {
                     detector.detect(frame)
                 }
 
+                val mappedBoxes = personBoxes.map { personBox ->
+                    CoordinateMapper.imageRectToPreviewRect(
+                        imageRect = personBox,
+                        imageWidth = frame.width,
+                        imageHeight = frame.height,
+                        previewWidth = previewWidth,
+                        previewHeight = previewHeight
+                    )
+                }
+
                 // Draw the detections back on the main thread because this updates the view.
-                binding.detectionOverlay.setDetections(frame.width, frame.height, personBoxes)
+                binding.detectionOverlay.setDetections(mappedBoxes)
                 Log.d(TAG, "Detected persons: ${personBoxes.size}")
 
                 if (personBoxes.isEmpty()) {
                     Toast.makeText(this@MainActivity, MISS_NO_PERSON_MESSAGE, Toast.LENGTH_SHORT)
                         .show()
+                    return@launch
                 }
+
+                val hitBoxes = mappedBoxes.filter { mappedBox ->
+                    mappedBox.contains(crosshairCenter.x, crosshairCenter.y)
+                }
+
+                if (hitBoxes.isEmpty()) {
+                    Toast.makeText(this@MainActivity, MISS_MESSAGE, Toast.LENGTH_SHORT).show()
+                    Log.d(TAG, "MISS \u2013 crosshair not inside any box")
+                    return@launch
+                }
+
+                val chosenHitBox = hitBoxes.minByOrNull { hitBox ->
+                    distanceBetweenCenters(hitBox, crosshairCenter)
+                } ?: return@launch
+
+                Log.d(TAG, "HIT \u2013 crosshair inside person box ${formatRect(chosenHitBox)}")
             }
         }
 
@@ -184,7 +225,8 @@ class MainActivity : AppCompatActivity() {
      * Configuration choices:
      * - resolution comes from [VisionConfig.analysisResolution]
      * - keep-only-latest avoids backlog if analysis falls behind
-     * - RGBA output allows direct conversion to a Bitmap
+     * - YUV output avoids the noisy RGBA gralloc path seen on some Mali devices while still
+     *   allowing conversion to a Bitmap through `ImageProxy.toBitmap()`
      */
     private fun buildImageAnalysis(): ImageAnalysis {
         val resolutionSelector = ResolutionSelector.Builder()
@@ -199,7 +241,7 @@ class MainActivity : AppCompatActivity() {
         return ImageAnalysis.Builder()
             .setResolutionSelector(resolutionSelector)
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888)
             .build()
             .also { analysisUseCase ->
                 analysisUseCase.setAnalyzer(analysisExecutor) { imageProxy ->
@@ -263,9 +305,31 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Calculates the Euclidean distance between a box center and the crosshair center.
+     *
+     * When multiple person boxes overlap the crosshair, the closest center is treated as the
+     * selected target.
+     */
+    private fun distanceBetweenCenters(box: RectF, point: PointF): Double {
+        return hypot((box.centerX() - point.x).toDouble(), (box.centerY() - point.y).toDouble())
+    }
+
+    /**
+     * Formats a rectangle for compact log output.
+     *
+     * Values are rounded to whole pixels to keep logcat easy to scan.
+     */
+    private fun formatRect(rect: RectF): String {
+        return "[l=${rect.left.toInt()}, t=${rect.top.toInt()}, r=${rect.right.toInt()}, b=${rect.bottom.toInt()}]"
+    }
+
     companion object {
         /** Tag used for logcat output from this activity. */
         private const val TAG = "MainActivity"
+
+        /** Player-facing message used when people are detected but the crosshair misses all boxes. */
+        private const val MISS_MESSAGE = "MISS"
 
         /** Player-facing message used when shoot finds no detected person. */
         private const val MISS_NO_PERSON_MESSAGE = "MISS \u2013 no person detected"

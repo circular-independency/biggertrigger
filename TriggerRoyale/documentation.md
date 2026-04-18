@@ -1,17 +1,19 @@
 # TriggerRoyale Android Vision Notes
 
-This repository currently contains the native Android MVP for the Kotlin vision module that will later be exposed to Flutter as a plugin. The current app is intentionally small: it opens the back camera, shows a preview, draws a crosshair overlay, keeps the most recent analyzed frame in memory, and lets the `SHOOT` button run person detection against that cached frame.
+This repository currently contains the native Android MVP for the Kotlin vision module that will later be exposed to Flutter as a plugin. The current app is intentionally small: it opens the back camera, shows a preview, draws a crosshair overlay, keeps the most recent analyzed frame in memory, runs person detection when the `SHOOT` button is pressed, maps detections into preview space, and decides whether the crosshair hit a person box.
 
 ## Current structure
 
 - `app/src/main/java/com/example/triggerroyale/MainActivity.kt`
-  Owns camera permission handling, CameraX setup, preview binding, frame analysis, detector lifecycle, and the temporary `SHOOT` button behavior.
+  Owns camera permission handling, CameraX setup, frame caching, detector lifecycle, coordinate mapping usage, hit-testing, and the temporary `SHOOT` button behavior.
 - `app/src/main/java/com/example/triggerroyale/CrosshairOverlayView.kt`
   Draws the crosshair overlay on top of the preview.
 - `app/src/main/java/com/example/triggerroyale/DetectionOverlayView.kt`
-  Draws debug detection rectangles on top of the preview using the same fill-center scaling behavior as `PreviewView`.
+  Draws debug detection rectangles in preview/screen coordinates.
 - `app/src/main/java/com/example/triggerroyale/ObjectDetectorHelper.kt`
   Wraps MediaPipe Object Detector setup and image-mode inference.
+- `app/src/main/java/com/example/triggerroyale/CoordinateMapper.kt`
+  Converts rectangles from image-space pixels into preview/screen-space pixels using center-crop mapping.
 - `app/src/main/java/com/example/triggerroyale/VisionConfig.kt`
   Central place for tunable vision settings such as analysis resolution, detector asset path, max results, and score threshold.
 - `app/src/main/res/layout/activity_main.xml`
@@ -26,13 +28,13 @@ This repository currently contains the native Android MVP for the Kotlin vision 
 - `Preview`
   Sends frames to `PreviewView` so the player can aim.
 - `ImageAnalysis`
-  Produces RGBA frames for the future vision pipeline.
+  Produces RGBA frames for the vision pipeline.
 
 The analysis use case is configured as follows:
 
 - Resolution: `VisionConfig.analysisResolution` (currently `640 x 480`)
 - Backpressure: `ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST`
-- Output format: `ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888`
+- Output format: `ImageAnalysis.OUTPUT_IMAGE_FORMAT_YUV_420_888`
 - Analyzer thread: `Executors.newSingleThreadExecutor()`
 
 Inside the analyzer:
@@ -42,7 +44,12 @@ Inside the analyzer:
 3. The bitmap is rotated using `imageInfo.rotationDegrees` so the cached frame is always upright.
 4. The rotated bitmap is stored in `latestFrame`, an `AtomicReference<Bitmap?>`.
 
-This is the only shared frame state right now. The `SHOOT` button reads `latestFrame`. If a frame is available, the app runs object detection on a background coroutine, logs the person count, and draws the detected boxes on screen. If no frame is available, it shows `No frame yet`.
+The app intentionally uses YUV analysis output instead of RGBA output. On some Mali-based devices,
+the RGBA analysis path can spam gralloc errors during startup even when the app still appears to
+work. Using YUV keeps the pipeline compatible with `toBitmap()` while avoiding that vendor-specific
+buffer path.
+
+This shared frame is the input to the current shoot pipeline.
 
 ## Object detection pipeline
 
@@ -61,14 +68,39 @@ When `SHOOT` is pressed:
 2. Detection runs on `Dispatchers.Default`.
 3. MediaPipe returns detection results for the full frame.
 4. The code keeps only detections whose top category is `person`.
-5. The resulting person boxes are drawn as green rectangles on the debug overlay.
-6. If no person is detected, the app shows `MISS – no person detected`.
+5. Each person box is mapped from image space into preview space through `CoordinateMapper.imageRectToPreviewRect(...)`.
+6. The mapped rectangles are drawn as green rectangles on the debug overlay.
+7. The crosshair center is taken from the middle of `PreviewView`.
+8. If no person is detected, the app shows `MISS – no person detected`.
+9. If people are detected but the crosshair is not inside any mapped box, the app shows `MISS` and logs a crosshair miss.
+10. If the crosshair is inside multiple boxes, the app picks the one whose center is closest to the crosshair center and logs it as the chosen hit.
 
-Important note about bounding boxes:
+## Coordinate mapping
 
-- MediaPipe’s Android Object Detector returns detection boxes in image pixel coordinates for the processed image.
-- The app therefore uses those coordinates directly.
-- The overlay scales those image coordinates onto the screen using the same center-crop behavior as `PreviewView` with `fillCenter`.
+Camera analysis and UI preview do not use the same coordinate space:
+
+- MediaPipe returns person boxes in image-space pixels relative to the analyzed bitmap.
+- The player aims using the on-screen `PreviewView`.
+- `PreviewView` uses center-crop (`fillCenter`) behavior, which scales the image until the view is filled and crops any overflow.
+
+Because of that, hit logic must not use raw image-space boxes directly. The app now maps each image-space detection rectangle into preview-space before:
+
+- drawing debug rectangles
+- checking whether the crosshair center is inside a person box
+- choosing the closest overlapping target
+
+The mapping logic in `CoordinateMapper`:
+
+- computes the scale as `max(previewWidth / imageWidth, previewHeight / imageHeight)`
+- scales the rectangle
+- offsets it so the image is centered in the preview
+- clamps the final rectangle to preview bounds
+
+Important notes about bounding boxes:
+
+- MediaPipe's Android Object Detector returns detection boxes in image pixel coordinates for the processed image.
+- The app uses those image coordinates directly as the source space.
+- The app explicitly maps them into preview space before any UI or hit-testing logic runs.
 
 ## Why the analyzer closes the proxy immediately
 
@@ -99,6 +131,8 @@ These settings still live in `MainActivity.kt`:
   Replace `CameraSelector.DEFAULT_BACK_CAMERA` if front camera support is ever needed.
 - Analyzer threading
   Replace the single-thread executor only if there is a measured reason. The current setup is simple and predictable.
+- Hit-selection behavior
+  The current target-selection rule is: choose the overlapping box whose center is closest to the crosshair center.
 
 ## Planned evolution toward the Flutter plugin
 
@@ -116,6 +150,7 @@ Flutter will eventually own UI composition and call into the Kotlin side through
 - Keep CameraX setup isolated and explicit. Small helper methods are preferred over large lifecycle methods.
 - Avoid mixing ML logic directly into UI click handlers.
 - Keep bitmap rotation and frame caching separate from future target detection and embedding logic.
+- Keep coordinate mapping centralized in `CoordinateMapper` so overlay rendering and hit-testing cannot drift apart.
 - Keep one source of truth for tunable settings in `VisionConfig.kt` so experiments stay easy to reason about.
 - If memory pressure becomes an issue later, profile before optimizing. The current goal is a working end-to-end loop, not a final performance pass.
-- If you add MediaPipe or identification code, document where it runs and what data contract it expects from `latestFrame`.
+- If you add cropping, embedding, or server sync next, document where each stage runs and what coordinate space it expects.

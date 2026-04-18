@@ -89,15 +89,6 @@ class VisionFlutterPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         ).also { channel ->
             channel.setMethodCallHandler(this)
         }
-
-        objectDetectorHelper = ObjectDetectorHelper(binding.applicationContext).also { helper ->
-            PlayerRegistry.objectDetectorHelper = helper
-        }
-        imageEmbedderHelper = ImageEmbedderHelper(binding.applicationContext).also { helper ->
-            PlayerRegistry.imageEmbedderHelper = helper
-        }
-
-        rebuildShootPipelineIfReady()
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
@@ -136,6 +127,12 @@ class VisionFlutterPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
 
     /** Starts CameraX preview bound to a Flutter texture and returns the texture id. */
     private fun startPreview(result: MethodChannel.Result) {
+        val initializationError = ensureVisionHelpers()
+        if (initializationError != null) {
+            result.error("PREVIEW_FAILED", initializationError, null)
+            return
+        }
+
         val context = applicationContext
         val registry = textureRegistry
         val detector = objectDetectorHelper
@@ -240,6 +237,12 @@ class VisionFlutterPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
 
     /** Registers a player from JPEG-encoded bytes provided by Flutter. */
     private fun registerPlayer(call: MethodCall, result: MethodChannel.Result) {
+        val initializationError = ensureVisionHelpers()
+        if (initializationError != null) {
+            result.error("REGISTRATION_FAILED", initializationError, null)
+            return
+        }
+
         val playerId = call.argument<String>("playerId")
         val imageBytes = (call.argument<List<Any?>>("imageBytes") ?: emptyList())
             .mapNotNull { item -> item as? ByteArray }
@@ -300,6 +303,12 @@ class VisionFlutterPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
 
     /** Runs the full shoot pipeline and returns a simple Flutter-friendly result map. */
     private fun shoot(result: MethodChannel.Result) {
+        val initializationError = ensureVisionHelpers()
+        if (initializationError != null) {
+            result.error("SHOOT_FAILED", initializationError, null)
+            return
+        }
+
         val pipeline = shootPipeline
         if (pipeline == null) {
             result.error("SHOOT_FAILED", "Shoot pipeline not ready.", null)
@@ -343,6 +352,60 @@ class VisionFlutterPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                 else frameHolder.getLatest()?.height ?: 0
             }
         )
+    }
+
+    /**
+     * Lazily initializes ML helpers so startup crashes are avoided when vision dependencies are not
+     * available on the current device/runtime.
+     *
+     * @return null when initialization is successful, otherwise a user-facing error message.
+     */
+    private fun ensureVisionHelpers(): String? {
+        val context = applicationContext ?: return "Plugin context is not available."
+        var createdDetector = false
+        var createdEmbedder = false
+
+        try {
+            if (objectDetectorHelper == null) {
+                objectDetectorHelper = ObjectDetectorHelper(context)
+                createdDetector = true
+            }
+            if (imageEmbedderHelper == null) {
+                imageEmbedderHelper = ImageEmbedderHelper(context)
+                createdEmbedder = true
+            }
+
+            val detector = objectDetectorHelper
+            val embedder = imageEmbedderHelper
+            if (detector == null || embedder == null) {
+                return "Vision helpers are unavailable."
+            }
+
+            PlayerRegistry.objectDetectorHelper = detector
+            PlayerRegistry.imageEmbedderHelper = embedder
+            rebuildShootPipelineIfReady()
+            return null
+        } catch (throwable: Throwable) {
+            if (createdDetector) {
+                try {
+                    objectDetectorHelper?.close()
+                } catch (_: Throwable) {
+                    // Best-effort cleanup.
+                }
+                objectDetectorHelper = null
+            }
+            if (createdEmbedder) {
+                try {
+                    imageEmbedderHelper?.close()
+                } catch (_: Throwable) {
+                    // Best-effort cleanup.
+                }
+                imageEmbedderHelper = null
+            }
+            shootPipeline = null
+            val message = throwable.message ?: throwable::class.java.simpleName
+            return "Vision initialization failed: $message"
+        }
     }
 
     /** Stops and releases all preview-related resources without touching the method result. */

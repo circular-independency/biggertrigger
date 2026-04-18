@@ -28,6 +28,12 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        ndk {
+            // MediaPipe tasks-vision AAR currently ships native libs for arm64-v8a and armeabi-v7a
+            // (and x86), but not x86_64. Restricting ABIs avoids runtime UnsatisfiedLinkError.
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     buildTypes {
@@ -37,8 +43,16 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    aaptOptions {
+        noCompress += "tflite"
+    }
 }
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    implementation(project(":visionmodule"))
 }

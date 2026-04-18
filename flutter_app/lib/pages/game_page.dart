@@ -1,25 +1,33 @@
 import 'dart:async';
 
-import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../components/cyber_theme.dart';
+import '../logic/vision_manager.dart';
 
 class GamePage extends StatefulWidget {
-  const GamePage({super.key});
+  const GamePage({super.key, VisionManager? visionManager})
+    : visionManager = visionManager ?? const VisionManager();
+
+  final VisionManager visionManager;
 
   @override
   State<GamePage> createState() => _GamePageState();
 }
 
 class _GamePageState extends State<GamePage> {
-  CameraController? _cameraController;
+  int? _textureId;
   String? _error;
   bool _isLoading = true;
+  bool _isUnsupported = false;
 
   final List<GameNotification> _notifications = <GameNotification>[];
   int _nextNotificationId = 0;
+
+  bool get _isVisionPlatform =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
   @override
   void initState() {
@@ -33,9 +41,9 @@ class _GamePageState extends State<GamePage> {
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
     ]);
-    await _initializeCamera();
+    await _initializePreview();
 
-    if (mounted) {
+    if (mounted && !_isUnsupported) {
       showGameNotification('SECURE_LINK_ESTABLISHED', isGreen: true);
       Future<void>.delayed(const Duration(milliseconds: 800), () {
         if (mounted) {
@@ -45,32 +53,24 @@ class _GamePageState extends State<GamePage> {
     }
   }
 
-  Future<void> _initializeCamera() async {
+  Future<void> _initializePreview() async {
+    if (!_isVisionPlatform) {
+      setState(() {
+        _isUnsupported = true;
+        _isLoading = false;
+      });
+      return;
+    }
+
     try {
-      final List<CameraDescription> cameras = await availableCameras();
-      if (cameras.isEmpty) {
-        setState(() {
-          _error = 'No camera available on this device.';
-          _isLoading = false;
-        });
-        return;
-      }
-
-      final CameraDescription camera = cameras.first;
-      final CameraController controller = CameraController(
-        camera,
-        ResolutionPreset.medium,
-        enableAudio: false,
-      );
-
-      await controller.initialize();
+      final int textureId = await widget.visionManager.startPreview();
       if (!mounted) {
-        await controller.dispose();
+        await widget.visionManager.stopPreview();
         return;
       }
 
       setState(() {
-        _cameraController = controller;
+        _textureId = textureId;
         _isLoading = false;
       });
     } catch (e) {
@@ -78,10 +78,40 @@ class _GamePageState extends State<GamePage> {
         return;
       }
       setState(() {
-        _error = 'Failed to initialize camera: $e';
+        _error = 'Failed to initialize vision preview: $e';
         _isLoading = false;
       });
     }
+  }
+
+  Future<Map<dynamic, dynamic>> shoot() {
+    return widget.visionManager.shoot();
+  }
+
+  Future<Map<dynamic, dynamic>> registerPlayer({
+    required String playerId,
+    required List<Uint8List> imageBytes,
+  }) {
+    return widget.visionManager.registerPlayer(
+      playerId: playerId,
+      imageBytes: imageBytes,
+    );
+  }
+
+  Future<String> exportEmbeddings({required String playerId}) {
+    return widget.visionManager.exportEmbeddings(playerId: playerId);
+  }
+
+  Future<String> exportAll() {
+    return widget.visionManager.exportAll();
+  }
+
+  Future<void> importEmbeddings({required String json}) {
+    return widget.visionManager.importEmbeddings(json: json);
+  }
+
+  Future<void> clearRegistrations() {
+    return widget.visionManager.clearRegistrations();
   }
 
   void showGameNotification(String message, {required bool isGreen}) {
@@ -112,9 +142,11 @@ class _GamePageState extends State<GamePage> {
 
   @override
   void dispose() {
+    if (_isVisionPlatform && _textureId != null) {
+      unawaited(widget.visionManager.stopPreview());
+    }
     unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge));
     unawaited(SystemChrome.setPreferredOrientations(DeviceOrientation.values));
-    _cameraController?.dispose();
     super.dispose();
   }
 
@@ -238,6 +270,18 @@ class _GamePageState extends State<GamePage> {
       return const Center(child: CircularProgressIndicator());
     }
 
+    if (_isUnsupported) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text(
+            'Vision module is currently supported on Android only.',
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+    }
+
     if (_error != null) {
       return Center(
         child: Padding(
@@ -250,15 +294,15 @@ class _GamePageState extends State<GamePage> {
       );
     }
 
-    final CameraController? controller = _cameraController;
-    if (controller == null || !controller.value.isInitialized) {
-      return const Center(child: Text('Camera is not ready.'));
+    final int? textureId = _textureId;
+    if (textureId == null) {
+      return const Center(child: Text('Vision preview is not ready.'));
     }
 
     return Stack(
       fit: StackFit.expand,
       children: <Widget>[
-        CameraPreview(controller),
+        Texture(textureId: textureId),
         IgnorePointer(
           child: Container(
             decoration: const BoxDecoration(
@@ -316,7 +360,6 @@ class _TopHudBar extends StatelessWidget {
     );
   }
 }
-
 
 class _IntegrityBlock extends StatelessWidget {
   const _IntegrityBlock();

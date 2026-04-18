@@ -14,6 +14,10 @@ This repository currently contains the native Android MVP for the Kotlin vision 
   Wraps MediaPipe Object Detector setup and image-mode inference.
 - `app/src/main/java/com/example/triggerroyale/ImageEmbedderHelper.kt`
   Wraps MediaPipe Image Embedder setup and one-shot embedding inference.
+- `app/src/main/java/com/example/triggerroyale/PlayerEmbedding.kt`
+  Simple data model describing one player's collected embeddings.
+- `app/src/main/java/com/example/triggerroyale/PlayerRegistry.kt`
+  In-memory registration store with registration, import/export, and read/clear helpers.
 - `app/src/main/java/com/example/triggerroyale/CoordinateMapper.kt`
   Utility for mapping between image-space and preview-space rectangles. It is currently kept for future use if preview and analysis spaces diverge again.
 - `app/src/main/java/com/example/triggerroyale/CropHelper.kt`
@@ -93,6 +97,50 @@ Embedding flow:
 2. MediaPipe produces one or more embeddings.
 3. The first float embedding is returned.
 4. The app logs the embedding vector size and shows a success toast.
+
+## Player registration system
+
+The project now includes an in-memory player embedding registry through `PlayerRegistry`.
+
+Registry data model:
+
+- `PlayerEmbedding`
+  Contains a `playerId` plus the list of accepted embedding vectors collected for that player.
+
+Registration flow in `PlayerRegistry.register(playerId, bitmaps)`:
+
+1. For each candidate bitmap, run person detection.
+2. If multiple people are found, keep the largest detected person box.
+3. If no person is found, skip that bitmap.
+4. Crop the selected person box.
+5. If the crop is blurry, skip it.
+6. Embed the crop.
+7. Store the resulting `FloatArray`.
+8. Merge all accepted embeddings into the registry under that `playerId`.
+
+If every bitmap is skipped, `register(...)` throws `IllegalArgumentException`.
+
+Dependency injection:
+
+- `PlayerRegistry` does not create MediaPipe helpers itself.
+- `ObjectDetectorHelper` and `ImageEmbedderHelper` are injected into the registry as `lateinit` vars during app startup.
+- `MainActivity` assigns those dependencies when each helper initializes successfully.
+
+Serialization format:
+
+- Float vectors are serialized as JSON arrays of numbers.
+- The full registry is serialized as:
+  `{ "playerId": [[0.1, 0.2, ...], [...]], "otherPlayer": [[...]] }`
+
+Supported registry APIs:
+
+- `register(playerId, bitmaps)`
+- `importEmbeddings(json)`
+- `exportEmbeddings(playerId)`
+- `exportAll()`
+- `getAll()`
+- `clear()`
+- `playerCount()`
 
 ## Coordinate spaces
 
@@ -188,6 +236,7 @@ Flutter will eventually own UI composition and call into the Kotlin side through
 - Keep coordinate mapping centralized in `CoordinateMapper` so overlay rendering and future hit-testing cannot drift apart.
 - Keep one source of truth for tunable settings in `VisionConfig.kt` so experiments stay easy to reason about.
 - Keep crop extraction and blur scoring inside `CropHelper` so future embedding code can stay focused on identification.
+- Keep registration and JSON serialization concerns inside `PlayerRegistry` so UI or networking code can stay thin.
 - Keep detection and embedding wrappers separate so model-specific MediaPipe details stay out of `MainActivity`.
 - If memory pressure becomes an issue later, profile before optimizing. The current goal is a working end-to-end loop, not a final performance pass.
 - If you add cropping, embedding, or server sync next, document where each stage runs and what coordinate space it expects.

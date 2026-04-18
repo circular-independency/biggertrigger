@@ -238,7 +238,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         objectDetectorHelper = try {
-            ObjectDetectorHelper(this)
+            ObjectDetectorHelper(this).also { helper ->
+                PlayerRegistry.objectDetectorHelper = helper
+            }
         } catch (exception: Exception) {
             Log.e(TAG, "Failed to initialize object detector", exception)
             Toast.makeText(this, "Failed to initialize detector", Toast.LENGTH_SHORT).show()
@@ -258,7 +260,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         imageEmbedderHelper = try {
-            ImageEmbedderHelper(this)
+            ImageEmbedderHelper(this).also { helper ->
+                PlayerRegistry.imageEmbedderHelper = helper
+            }
         } catch (exception: Exception) {
             Log.e(TAG, "Failed to initialize image embedder", exception)
             Toast.makeText(this, "Failed to initialize embedder", Toast.LENGTH_SHORT).show()

@@ -1,120 +1,85 @@
 import 'dart:async';
 
-import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../components/cyber_theme.dart';
+import '../logic/game_models.dart';
+import '../logic/game_session_controller.dart';
+import '../main.dart';
 
 class GamePage extends StatefulWidget {
-  const GamePage({super.key});
+  const GamePage({
+    super.key,
+    required this.controller,
+  });
+
+  final GameSessionController controller;
 
   @override
   State<GamePage> createState() => _GamePageState();
 }
 
 class _GamePageState extends State<GamePage> {
-  CameraController? _cameraController;
-  String? _error;
-  bool _isLoading = true;
-
-  final List<GameNotification> _notifications = <GameNotification>[];
-  int _nextNotificationId = 0;
+  String? _lastShownError;
 
   @override
   void initState() {
     super.initState();
+    widget.controller.addListener(_handleControllerUpdate);
     unawaited(_configureGameScreen());
   }
 
   Future<void> _configureGameScreen() async {
-    await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    await SystemChrome.setPreferredOrientations(<DeviceOrientation>[
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
-    await _initializeCamera();
-
-    if (mounted) {
-      showGameNotification('SECURE_LINK_ESTABLISHED', isGreen: true);
-      Future<void>.delayed(const Duration(milliseconds: 800), () {
-        if (mounted) {
-          showGameNotification('LOW_SIGNAL_ZONE_DETECTED', isGreen: false);
-        }
-      });
-    }
-  }
-
-  Future<void> _initializeCamera() async {
     try {
-      final List<CameraDescription> cameras = await availableCameras();
-      if (cameras.isEmpty) {
-        setState(() {
-          _error = 'No camera available on this device.';
-          _isLoading = false;
-        });
-        return;
-      }
-
-      final CameraDescription camera = cameras.first;
-      final CameraController controller = CameraController(
-        camera,
-        ResolutionPreset.medium,
-        enableAudio: false,
-      );
-
-      await controller.initialize();
-      if (!mounted) {
-        await controller.dispose();
-        return;
-      }
-
-      setState(() {
-        _cameraController = controller;
-        _isLoading = false;
-      });
-    } catch (e) {
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      await SystemChrome.setPreferredOrientations(<DeviceOrientation>[
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+      await widget.controller.startVisionPreview();
+    } catch (error) {
       if (!mounted) {
         return;
       }
-      setState(() {
-        _error = 'Failed to initialize camera: $e';
-        _isLoading = false;
-      });
+
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          SnackBar(
+            backgroundColor: const Color(0xFF9B1C25),
+            content: Text('Failed to start native camera preview: $error'),
+          ),
+        );
     }
   }
 
-  void showGameNotification(String message, {required bool isGreen}) {
-    final GameNotification notification = GameNotification(
-      id: _nextNotificationId++,
-      message: message,
-      isGreen: isGreen,
-      createdAt: DateTime.now(),
-    );
+  void _handleControllerUpdate() {
+    if (!mounted) {
+      return;
+    }
 
-    setState(() {
-      _notifications.add(notification);
-      if (_notifications.length > 2) {
-        _notifications.removeAt(0);
-      }
-    });
-
-    Timer(const Duration(seconds: 3), () {
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _notifications.removeWhere((GameNotification n) => n.id == notification.id);
-      });
-    });
+    if (widget.controller.connectionState == SessionConnectionState.error &&
+        widget.controller.lastError != null &&
+        widget.controller.lastError != _lastShownError) {
+      _lastShownError = widget.controller.lastError;
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          SnackBar(
+            backgroundColor: const Color(0xFF9B1C25),
+            content: Text(widget.controller.lastError!),
+          ),
+        );
+    }
   }
 
   @override
   void dispose() {
+    widget.controller.removeListener(_handleControllerUpdate);
+    unawaited(widget.controller.stopVisionPreview());
     unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge));
     unawaited(SystemChrome.setPreferredOrientations(DeviceOrientation.values));
-    _cameraController?.dispose();
     super.dispose();
   }
 
@@ -151,7 +116,7 @@ class _GamePageState extends State<GamePage> {
                 ),
                 const SizedBox(height: 6),
                 const Text(
-                  'Quit Game?',
+                  'Quit Match?',
                   style: TextStyle(
                     color: CyberColors.textPrimary,
                     fontSize: 24 / 1.5,
@@ -160,7 +125,7 @@ class _GamePageState extends State<GamePage> {
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  'Are you sure you want to quit the game?',
+                  'This will disconnect you from the current lobby.',
                   style: TextStyle(
                     color: CyberColors.textMuted,
                     fontSize: 14,
@@ -213,167 +178,311 @@ class _GamePageState extends State<GamePage> {
     return shouldQuit ?? false;
   }
 
+  Future<void> _exitMatch() async {
+    await widget.controller.disconnect();
+    if (!mounted) {
+      return;
+    }
+
+    Navigator.pushNamedAndRemoveUntil(
+      context,
+      DragonHackApp.mainMenuRoute,
+      (Route<dynamic> route) => false,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (bool didPop, Object? result) async {
-        if (didPop) {
-          return;
-        }
+    return AnimatedBuilder(
+      animation: widget.controller,
+      builder: (BuildContext context, Widget? child) {
+        return PopScope(
+          canPop: false,
+          onPopInvokedWithResult: (bool didPop, Object? result) async {
+            if (didPop) {
+              return;
+            }
 
-        final bool shouldQuit = await _confirmExit();
-        if (shouldQuit && context.mounted) {
-          Navigator.of(context).pop();
-        }
+            final bool shouldQuit = await _confirmExit();
+            if (shouldQuit && mounted) {
+              unawaited(_exitMatch());
+            }
+          },
+          child: Scaffold(
+            body: _buildBody(),
+          ),
+        );
       },
-      child: Scaffold(
-        body: _buildBody(),
-      ),
     );
   }
 
   Widget _buildBody() {
-    if (_isLoading) {
+    if (widget.controller.isPreviewStarting || widget.controller.previewTextureId == null) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (_error != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Text(
-            _error!,
-            textAlign: TextAlign.center,
-          ),
-        ),
-      );
-    }
-
-    final CameraController? controller = _cameraController;
-    if (controller == null || !controller.value.isInitialized) {
-      return const Center(child: Text('Camera is not ready.'));
-    }
+    final SessionPlayer? localPlayer = widget.controller.localPlayer;
+    final int hpPercent = localPlayer?.hp ?? 0;
 
     return Stack(
       fit: StackFit.expand,
       children: <Widget>[
-        CameraPreview(controller),
-        IgnorePointer(
-          child: Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: <Color>[Color(0x44000000), Color(0x55000000)],
-              ),
+        Container(color: Colors.black),
+        Center(
+          child: AspectRatio(
+            aspectRatio: 4 / 3,
+            child: Stack(
+              fit: StackFit.expand,
+              children: <Widget>[
+                Texture(textureId: widget.controller.previewTextureId!),
+                IgnorePointer(
+                  child: Container(
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: <Color>[Color(0x44000000), Color(0x66000000)],
+                      ),
+                    ),
+                  ),
+                ),
+                const IgnorePointer(child: _ScanlineOverlay()),
+                const IgnorePointer(child: _CrosshairOverlay()),
+              ],
             ),
           ),
         ),
-        const IgnorePointer(child: _ScanlineOverlay()),
         SafeArea(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
-                const _TopHudBar(),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Expanded(
+                      child: _IntegrityBlock(
+                        hpPercent: hpPercent,
+                        playerName: widget.controller.username,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    SizedBox(
+                      width: 280,
+                      child: _RosterPanel(
+                        players: widget.controller.players,
+                        localPlayerId: widget.controller.username,
+                      ),
+                    ),
+                  ],
+                ),
                 const Spacer(),
-                const Spacer(),
-                _NotificationStack(notifications: _notifications),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: <Widget>[
+                    Expanded(
+                      child: _NotificationStack(
+                        notifications: widget.controller.notifications,
+                      ),
+                    ),
+                    const SizedBox(width: 14),
+                    _FireButton(
+                      enabled: widget.controller.canShoot,
+                      isBusy: widget.controller.isShooting,
+                      onTap: () {
+                        unawaited(widget.controller.shoot());
+                      },
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
         ),
-        const IgnorePointer(child: _CrosshairOverlay()),
+        if (widget.controller.phase != MatchPhase.finished &&
+            widget.controller.isLocalEliminated)
+          const _EndOverlay(
+            title: 'ELIMINATED',
+            subtitle: 'You are out. Stay in the lobby until the winner is decided.',
+            accent: Color(0xFFFF4C52),
+          ),
+        if (widget.controller.phase == MatchPhase.finished)
+          _EndOverlay(
+            title: widget.controller.isLocalWinner ? 'VICTORY' : 'MATCH OVER',
+            subtitle: widget.controller.isLocalWinner
+                ? 'You are the last player standing.'
+                : 'Winner: ${widget.controller.winnerId ?? 'UNKNOWN'}',
+            accent: widget.controller.isLocalWinner
+                ? CyberColors.lime
+                : const Color(0xFFFFC44D),
+          ),
       ],
     );
   }
 }
 
-class GameNotification {
-  const GameNotification({
-    required this.id,
-    required this.message,
-    required this.isGreen,
-    required this.createdAt,
+class _IntegrityBlock extends StatelessWidget {
+  const _IntegrityBlock({
+    required this.hpPercent,
+    required this.playerName,
   });
 
-  final int id;
-  final String message;
-  final bool isGreen;
-  final DateTime createdAt;
-}
-
-class _TopHudBar extends StatelessWidget {
-  const _TopHudBar();
+  final int hpPercent;
+  final String playerName;
 
   @override
   Widget build(BuildContext context) {
-    return const Align(
-      alignment: Alignment.topCenter,
-      child: _IntegrityBlock(),
-    );
-  }
-}
-
-
-class _IntegrityBlock extends StatelessWidget {
-  const _IntegrityBlock();
-
-  @override
-  Widget build(BuildContext context) {
-    const int hpPercent = 60;
     const int totalBars = 10;
-    final int activeBars = ((hpPercent / 100) * totalBars).round();
+    final int activeBars = ((hpPercent / 100) * totalBars).round().clamp(0, totalBars);
 
     return Container(
       width: 480,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: CyberColors.panelSoft.withValues(alpha: 0.85),
+        color: CyberColors.panelSoft.withValues(alpha: 0.88),
         border: Border.all(color: CyberColors.line.withValues(alpha: 0.25)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          const Text(
-            'HP',
-            style: TextStyle(
-              color: CyberColors.cyan,
+          Text(
+            playerName,
+            style: const TextStyle(
+              color: CyberColors.textPrimary,
               fontSize: 14,
               fontWeight: FontWeight.w800,
               letterSpacing: 1.1,
             ),
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Row(
-              children: List<Widget>.generate(
-                totalBars,
-                (int i) => Expanded(
-                  child: Container(
-                    height: 11,
-                    margin: EdgeInsets.only(right: i == totalBars - 1 ? 0 : 4),
-                    decoration: BoxDecoration(
-                      color: i < activeBars
-                          ? CyberColors.lime
-                          : CyberColors.lime.withValues(alpha: 0.25),
-                      borderRadius: BorderRadius.circular(2),
+          const SizedBox(height: 8),
+          Row(
+            children: <Widget>[
+              const Text(
+                'HP',
+                style: TextStyle(
+                  color: CyberColors.cyan,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.1,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Row(
+                  children: List<Widget>.generate(
+                    totalBars,
+                    (int index) => Expanded(
+                      child: Container(
+                        height: 11,
+                        margin: EdgeInsets.only(right: index == totalBars - 1 ? 0 : 4),
+                        decoration: BoxDecoration(
+                          color: index < activeBars
+                              ? CyberColors.lime
+                              : CyberColors.lime.withValues(alpha: 0.25),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
+              const SizedBox(width: 12),
+              Text(
+                '$hpPercent%',
+                style: const TextStyle(
+                  color: CyberColors.lime,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 12),
+        ],
+      ),
+    );
+  }
+}
+
+class _RosterPanel extends StatelessWidget {
+  const _RosterPanel({
+    required this.players,
+    required this.localPlayerId,
+  });
+
+  final List<SessionPlayer> players;
+  final String localPlayerId;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: CyberColors.panelSoft.withValues(alpha: 0.88),
+        border: Border.all(color: CyberColors.line.withValues(alpha: 0.25)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
           const Text(
-            '$hpPercent%',
+            'OPERATIVES',
             style: TextStyle(
-              color: CyberColors.lime,
-              fontSize: 16,
-              fontWeight: FontWeight.w900,
+              color: CyberColors.cyan,
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.0,
             ),
           ),
+          const SizedBox(height: 10),
+          ...players.map((SessionPlayer player) {
+            final bool isLocal = player.id == localPlayerId;
+            final Color accent = !player.alive
+                ? const Color(0xFFFF4C52)
+                : isLocal
+                ? CyberColors.lime
+                : CyberColors.cyan;
+
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: Text(
+                          isLocal ? '${player.id} // YOU' : player.id,
+                          style: const TextStyle(
+                            color: CyberColors.textPrimary,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        player.alive ? '${player.hp} HP' : 'OUT',
+                        style: TextStyle(
+                          color: accent,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(2),
+                    child: LinearProgressIndicator(
+                      minHeight: 7,
+                      value: (player.hp.clamp(0, 100)) / 100,
+                      backgroundColor: Colors.white10,
+                      valueColor: AlwaysStoppedAnimation<Color>(accent),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
         ],
       ),
     );
@@ -383,23 +492,22 @@ class _IntegrityBlock extends StatelessWidget {
 class _NotificationStack extends StatelessWidget {
   const _NotificationStack({required this.notifications});
 
-  final List<GameNotification> notifications;
-  static const double _healthBarWidth = 480;
-  static const double _notificationScale = 0.7;
+  final List<SessionNotification> notifications;
 
   @override
   Widget build(BuildContext context) {
     return Align(
       alignment: Alignment.bottomLeft,
       child: ConstrainedBox(
-        constraints: const BoxConstraints(
-          maxWidth: _healthBarWidth * _notificationScale,
-        ),
+        constraints: const BoxConstraints(maxWidth: 360),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: notifications
-              .map((GameNotification notification) => _NotificationCard(notification: notification))
+              .map(
+                (SessionNotification notification) =>
+                    _NotificationCard(notification: notification),
+              )
               .toList(growable: false),
         ),
       ),
@@ -410,12 +518,16 @@ class _NotificationStack extends StatelessWidget {
 class _NotificationCard extends StatelessWidget {
   const _NotificationCard({required this.notification});
 
-  final GameNotification notification;
-  static const double _notificationScale = 0.7;
+  final SessionNotification notification;
 
   @override
   Widget build(BuildContext context) {
-    final Color accent = notification.isGreen ? CyberColors.lime : const Color(0xFFFF4C52);
+    final Color accent = switch (notification.tone) {
+      NotificationTone.success => CyberColors.lime,
+      NotificationTone.warning => const Color(0xFFFFC44D),
+      NotificationTone.danger => const Color(0xFFFF4C52),
+      NotificationTone.info => CyberColors.cyan,
+    };
 
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
@@ -431,11 +543,38 @@ class _NotificationCard extends StatelessWidget {
         notification.message,
         style: TextStyle(
           color: accent,
-          fontSize: 16 * _notificationScale,
+          fontSize: 12,
           fontWeight: FontWeight.w800,
           letterSpacing: 0.7,
         ),
       ),
+    );
+  }
+}
+
+class _FireButton extends StatelessWidget {
+  const _FireButton({
+    required this.enabled,
+    required this.isBusy,
+    required this.onTap,
+  });
+
+  final bool enabled;
+  final bool isBusy;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ElevatedButton.icon(
+      onPressed: enabled && !isBusy ? onTap : null,
+      style: ElevatedButton.styleFrom(
+        backgroundColor: enabled ? const Color(0xFFFF4C52) : Colors.white24,
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+      ),
+      icon: const Icon(Icons.gps_fixed_rounded),
+      label: Text(isBusy ? 'FIRING...' : 'FIRE'),
     );
   }
 }
@@ -512,4 +651,58 @@ class _ScanlinePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class _EndOverlay extends StatelessWidget {
+  const _EndOverlay({
+    required this.title,
+    required this.subtitle,
+    required this.accent,
+  });
+
+  final String title;
+  final String subtitle;
+  final Color accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: ColoredBox(
+        color: Colors.black.withValues(alpha: 0.55),
+        child: Center(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+            decoration: BoxDecoration(
+              color: CyberColors.panelSoft.withValues(alpha: 0.9),
+              border: Border.all(color: accent.withValues(alpha: 0.8), width: 1.5),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: accent,
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  subtitle,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: CyberColors.textPrimary,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

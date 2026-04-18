@@ -4,10 +4,11 @@ import '../components/cyber_input_field.dart';
 import '../components/cyber_theme.dart';
 import '../components/hud_background.dart';
 import '../components/settings_profile_card.dart';
+import '../logic/socket_manager.dart';
 import '../logic/user_preferences_manager.dart';
 
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key} );
+  const SettingsPage({super.key});
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -15,43 +16,53 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   final TextEditingController _usernameController = TextEditingController();
+  final TextEditingController _serverUrlController = TextEditingController();
 
   bool _isLoading = true;
-  String? _errorMessage;
+  String? _usernameError;
+  String? _serverUrlError;
 
   @override
   void initState() {
     super.initState();
-    _loadUsername();
+    _loadSettings();
   }
 
-  Future<void> _loadUsername() async {
+  Future<void> _loadSettings() async {
     final String? username = await UserPreferencesManager.getUsername();
+    final String? serverUrl = await UserPreferencesManager.getServerUrl();
+
     if (!mounted) {
       return;
     }
 
     setState(() {
       _usernameController.text = username ?? 'COMMANDER_01';
+      _serverUrlController.text = serverUrl ?? SocketManager.defaultSocketUrl();
       _isLoading = false;
     });
   }
 
-  Future<void> _saveUsername() async {
-    final String trimmed = _usernameController.text.trim();
+  Future<void> _saveSettings() async {
+    final String username = _usernameController.text.trim();
+    final String serverUrl = SocketManager.normalizeSocketUrl(
+      _serverUrlController.text.trim(),
+    );
 
-    if (trimmed.length < 3) {
-      setState(() {
-        _errorMessage = 'Username must have at least 3 characters.';
-      });
+    setState(() {
+      _usernameError = username.length < 3
+          ? 'Username must have at least 3 characters.'
+          : null;
+      _serverUrlError = serverUrl.isEmpty ? 'Server URL is required.' : null;
+    });
+
+    if (_usernameError != null || _serverUrlError != null) {
       return;
     }
 
-    setState(() {
-      _errorMessage = null;
-    });
+    await UserPreferencesManager.saveUsername(username);
+    await UserPreferencesManager.saveServerUrl(serverUrl);
 
-    await UserPreferencesManager.saveUsername(trimmed);
     if (!mounted) {
       return;
     }
@@ -67,7 +78,7 @@ class _SettingsPageState extends State<SettingsPage> {
             borderRadius: BorderRadius.circular(8),
           ),
           content: const Text(
-            'Username saved.',
+            'Settings saved.',
             style: TextStyle(color: CyberColors.cyan, fontWeight: FontWeight.w700),
           ),
         ),
@@ -77,6 +88,7 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   void dispose() {
     _usernameController.dispose();
+    _serverUrlController.dispose();
     super.dispose();
   }
 
@@ -121,7 +133,23 @@ class _SettingsPageState extends State<SettingsPage> {
                             controller: _usernameController,
                             label: 'USERNAME',
                             hint: 'Enter commander name',
-                            errorText: _errorMessage,
+                            errorText: _usernameError,
+                          ),
+                          SizedBox(height: gap),
+                          CyberInputField(
+                            controller: _serverUrlController,
+                            label: 'SERVER_URL',
+                            hint: 'ws://192.168.1.10:8765',
+                            errorText: _serverUrlError,
+                          ),
+                          SizedBox(height: gap * 0.6),
+                          const Text(
+                            'Use your computer LAN IP here so all phones connect to the same websocket server.',
+                            style: TextStyle(
+                              color: CyberColors.textMuted,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                           SizedBox(height: gap),
                           ElevatedButton(
@@ -134,8 +162,8 @@ class _SettingsPageState extends State<SettingsPage> {
                                 letterSpacing: 1.0,
                               ),
                             ),
-                            onPressed: _saveUsername,
-                            child: const Text('SAVE USERNAME'),
+                            onPressed: _saveSettings,
+                            child: const Text('SAVE SETTINGS'),
                           ),
                         ],
                       ),

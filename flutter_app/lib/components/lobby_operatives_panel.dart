@@ -110,26 +110,33 @@ class LobbyOperativesPanel extends StatelessWidget {
 
   Color _statusColor(LobbyPlayerStatusType type) {
     switch (type) {
-      case LobbyPlayerStatusType.lockedIn:
+      case LobbyPlayerStatusType.ready:
         return CyberColors.lime;
-      case LobbyPlayerStatusType.online:
+      case LobbyPlayerStatusType.host:
+        return CyberColors.cyan;
+      case LobbyPlayerStatusType.registered:
         return CyberColors.cyan;
       case LobbyPlayerStatusType.waiting:
         return CyberColors.amber;
-      case LobbyPlayerStatusType.scanning:
+      case LobbyPlayerStatusType.eliminated:
+        return const Color(0xFFFF4C52);
+      case LobbyPlayerStatusType.placeholder:
         return CyberColors.textMuted.withValues(alpha: 0.4);
     }
   }
 
   Color _markerColor(int index, LobbyPlayerStatusType type) {
-    if (type == LobbyPlayerStatusType.scanning) {
+    if (type == LobbyPlayerStatusType.placeholder) {
       return Colors.transparent;
     }
-    if (type == LobbyPlayerStatusType.lockedIn) {
+    if (type == LobbyPlayerStatusType.ready) {
       return CyberColors.lime;
     }
     if (type == LobbyPlayerStatusType.waiting) {
       return CyberColors.amber;
+    }
+    if (type == LobbyPlayerStatusType.eliminated) {
+      return const Color(0xFFFF4C52);
     }
 
     return index.isEven ? CyberColors.cyan : CyberColors.cyan.withValues(alpha: 0.7);

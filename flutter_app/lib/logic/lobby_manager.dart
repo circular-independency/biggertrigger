@@ -1,13 +1,12 @@
-enum LobbyStatus {
-  pending,
-  active,
-}
+import 'game_models.dart';
 
 enum LobbyPlayerStatusType {
-  lockedIn,
-  online,
+  host,
+  ready,
+  registered,
   waiting,
-  scanning,
+  eliminated,
+  placeholder,
 }
 
 class LobbyPlayer {
@@ -23,81 +22,57 @@ class LobbyPlayer {
   final LobbyPlayerStatusType statusType;
   final bool isPlaceholder;
 
-  LobbyPlayer copyWith({
-    String? name,
-    String? status,
-    LobbyPlayerStatusType? statusType,
-    bool? isPlaceholder,
+  factory LobbyPlayer.fromSessionPlayer(
+    SessionPlayer player, {
+    required bool isLocalPlayer,
   }) {
-    return LobbyPlayer(
-      name: name ?? this.name,
-      status: status ?? this.status,
-      statusType: statusType ?? this.statusType,
-      isPlaceholder: isPlaceholder ?? this.isPlaceholder,
-    );
-  }
-}
+    final String displayName = isLocalPlayer ? '${player.id} // YOU' : player.id;
 
-class LobbyManager {
-  LobbyStatus _status = LobbyStatus.pending;
-
-  final List<LobbyPlayer> _players = <LobbyPlayer>[
-    const LobbyPlayer(
-      name: 'COMMANDER_01',
-      status: 'WAITING',
-      statusType: LobbyPlayerStatusType.waiting,
-    ),
-    const LobbyPlayer(
-      name: 'GHOST_STALKER',
-      status: 'ONLINE',
-      statusType: LobbyPlayerStatusType.online,
-    ),
-    const LobbyPlayer(
-      name: 'NEON_VIPER',
-      status: 'WAITING',
-      statusType: LobbyPlayerStatusType.waiting,
-    ),
-    const LobbyPlayer(
-      name: 'CYBER_PUNK_88',
-      status: 'ONLINE',
-      statusType: LobbyPlayerStatusType.online,
-    ),
-    const LobbyPlayer(
-      name: 'EMPTY_SLOT',
-      status: 'SCANNING...',
-      statusType: LobbyPlayerStatusType.scanning,
-      isPlaceholder: true,
-    ),
-  ];
-
-  LobbyStatus getCurrentStatus() => _status;
-
-  bool get canStart => _status == LobbyStatus.active;
-
-  List<LobbyPlayer> getActivePlayers() => List<LobbyPlayer>.unmodifiable(_players);
-
-  int get activeOperativesCount =>
-      _players.where((LobbyPlayer p) => !p.isPlaceholder).length;
-
-  int get totalOperativeSlots => 8;
-
-  void setReady() {
-    _status = LobbyStatus.active;
-
-    if (_players.isNotEmpty) {
-      _players[0] = _players[0].copyWith(
-        status: 'LOCKED IN',
-        statusType: LobbyPlayerStatusType.lockedIn,
+    if (!player.alive) {
+      return LobbyPlayer(
+        name: displayName,
+        status: 'ELIMINATED',
+        statusType: LobbyPlayerStatusType.eliminated,
       );
     }
+
+    if (player.isHost) {
+      return LobbyPlayer(
+        name: displayName,
+        status: player.ready ? 'HOST // READY' : 'HOST',
+        statusType: LobbyPlayerStatusType.host,
+      );
+    }
+
+    if (player.ready) {
+      return LobbyPlayer(
+        name: displayName,
+        status: 'READY',
+        statusType: LobbyPlayerStatusType.ready,
+      );
+    }
+
+    if (player.registered) {
+      return LobbyPlayer(
+        name: displayName,
+        status: 'REGISTERED',
+        statusType: LobbyPlayerStatusType.registered,
+      );
+    }
+
+    return LobbyPlayer(
+      name: displayName,
+      status: 'WAITING',
+      statusType: LobbyPlayerStatusType.waiting,
+    );
   }
 
-  String statusLabel(LobbyStatus status) {
-    switch (status) {
-      case LobbyStatus.pending:
-        return 'Pending';
-      case LobbyStatus.active:
-        return 'Active';
-    }
+  static LobbyPlayer placeholder(int index) {
+    return LobbyPlayer(
+      name: 'EMPTY_SLOT_${index + 1}',
+      status: 'SCANNING...',
+      statusType: LobbyPlayerStatusType.placeholder,
+      isPlaceholder: true,
+    );
   }
 }

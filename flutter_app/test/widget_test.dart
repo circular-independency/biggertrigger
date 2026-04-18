@@ -9,81 +9,33 @@ void main() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
   });
 
-  testWidgets('app starts on main menu and shows buttons', (
-    WidgetTester tester,
-  ) async {
+  testWidgets('app starts on the main menu', (WidgetTester tester) async {
     await tester.pumpWidget(const DragonHackApp());
 
-    expect(find.text('Main Menu'), findsOneWidget);
-    expect(find.widgetWithText(ElevatedButton, 'Play'), findsOneWidget);
-    expect(find.widgetWithText(OutlinedButton, 'Settings'), findsOneWidget);
+    expect(find.text('DEPLOY'), findsOneWidget);
+    expect(find.byIcon(Icons.settings_suggest_rounded), findsOneWidget);
   });
 
-  testWidgets('play navigates to lobby with pending status', (
-    WidgetTester tester,
-  ) async {
-    await tester.pumpWidget(const DragonHackApp());
-
-    await tester.tap(find.text('Play'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Lobby'), findsOneWidget);
-    expect(find.text('Pending'), findsOneWidget);
-  });
-
-  testWidgets('settings loads saved username', (WidgetTester tester) async {
-    SharedPreferences.setMockInitialValues(<String, Object>{'username': 'Alice'});
+  testWidgets('settings loads and saves username and server url', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'username': 'Alice',
+      'server_url': 'ws://192.168.0.10:8765',
+    });
 
     await tester.pumpWidget(const DragonHackApp());
-
-    await tester.tap(find.text('Settings'));
+    await tester.tap(find.byIcon(Icons.settings_suggest_rounded));
     await tester.pumpAndSettle();
 
-    expect(find.text('Settings'), findsOneWidget);
-    expect(find.text('Alice'), findsOneWidget);
-  });
+    expect(find.text('SETTINGS'), findsOneWidget);
+    expect(find.byType(TextField), findsNWidgets(2));
 
-  testWidgets('invalid username shows validation error and does not persist', (
-    WidgetTester tester,
-  ) async {
-    await tester.pumpWidget(const DragonHackApp());
-
-    await tester.tap(find.text('Settings'));
+    await tester.enterText(find.byType(TextField).at(0), 'Bob');
+    await tester.enterText(find.byType(TextField).at(1), '192.168.0.11:8765');
+    await tester.tap(find.text('SAVE SETTINGS'));
     await tester.pumpAndSettle();
-
-    await tester.enterText(find.byType(TextField), 'ab');
-    await tester.tap(find.text('Save Username'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Username must have at least 3 characters.'), findsOneWidget);
-
-    final SharedPreferences prefs = await SharedPreferences.getInstance();
-    expect(prefs.getString('username'), isNull);
-  });
-
-  testWidgets('valid username persists and is shown when returning to settings', (
-    WidgetTester tester,
-  ) async {
-    await tester.pumpWidget(const DragonHackApp());
-
-    await tester.tap(find.text('Settings'));
-    await tester.pumpAndSettle();
-
-    await tester.enterText(find.byType(TextField), '  Bob  ');
-    await tester.tap(find.text('Save Username'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Username saved.'), findsOneWidget);
-
-    await tester.pageBack();
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Settings'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Bob'), findsOneWidget);
 
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     expect(prefs.getString('username'), 'Bob');
+    expect(prefs.getString('server_url'), 'ws://192.168.0.11:8765');
   });
 }

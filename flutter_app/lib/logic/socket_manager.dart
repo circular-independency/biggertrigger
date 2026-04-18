@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter_app/logic/user_preferences_manager.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -14,115 +13,83 @@ abstract interface class SocketChannel {
   StreamSink<dynamic> get sink;
 }
 
+/// Thin websocket transport used by the app session controller.
+///
+/// This class only owns:
+/// - socket lifecycle
+/// - JSON serialization/deserialization
+/// - a typed event stream for incoming server messages
+///
+/// Higher-level gameplay state stays in `GameSessionController`.
 class SocketManager {
-  SocketManager({SocketChannelFactory? channelFactory, String? socketUrlIn})
-    : _channelFactory = channelFactory ?? _defaultChannelFactory,
-      _socketUrl = socketUrlIn ?? _resolveDefaultServerUrl();
+  SocketManager({SocketChannelFactory? channelFactory})
+    : _channelFactory = channelFactory ?? _defaultChannelFactory;
 
-  // Override with:
-  // flutter run --dart-define SOCKET_URL=ws://<host>:8765
   static const String serverUrlOverride = String.fromEnvironment('SOCKET_URL');
 
-  
-  String? _username;
   final SocketChannelFactory _channelFactory;
-  final String _socketUrl;
-  final StreamController<String> _messagesController =
-      StreamController<String>.broadcast();
+  final StreamController<Map<String, dynamic>> _eventsController =
+      StreamController<Map<String, dynamic>>.broadcast();
 
   StreamSubscription<dynamic>? _subscription;
   SocketChannel? _channel;
   bool _isConnected = false;
+  String? _socketUrl;
 
   bool get isConnected => _isConnected;
+  Stream<Map<String, dynamic>> get events => _eventsController.stream;
+  String? get socketUrl => _socketUrl;
 
-  Stream<String> get messages => _messagesController.stream;
-
-
-  void handleData(String strData) {
-    
-    final data = jsonDecode(strData);
-    print(data);
-
-    switch (data["type"]) {
-      case "join":
-
-        break;
-      case "hit":
-        
-        break;
-    }
-
-  }
-
-  Future<String> _getUsername() async {
-    _username ??= await UserPreferencesManager.getUsername() ?? "";
-    return _username!;
-  }
-
-
-  Future<void> connect() async {
+  /// Opens the websocket connection to [socketUrl].
+  Future<void> connect(String socketUrl) async {
     if (_isConnected) {
       return;
     }
 
-
-    final Uri uri = Uri.parse(_socketUrl);
+    final String normalizedUrl = normalizeSocketUrl(socketUrl);
+    final Uri uri = Uri.parse(normalizedUrl);
     final SocketChannel channel = _channelFactory(uri);
 
     _subscription = channel.stream.listen(
-      (dynamic data) {
-        if (data is String) {
-          handleData(data);
-          return;
-        }
-        _messagesController.addError(
-          StateError('Expected text websocket payload, got ${data.runtimeType}.'),
-        );
-      },
+      _handleIncomingData,
       onError: (Object error, StackTrace stackTrace) {
-        _messagesController.addError(error, stackTrace);
+        _eventsController.addError(error, stackTrace);
       },
       onDone: () {
         _isConnected = false;
         _subscription = null;
         _channel = null;
+        _eventsController.add(<String, dynamic>{'type': 'socket_closed'});
       },
     );
 
     try {
-      await _getUsername();
       await channel.ready;
       _channel = channel;
+      _socketUrl = normalizedUrl;
       _isConnected = true;
-
-      final message = jsonEncode({
-        'type': 'join',
-        'username': _username,
-      });
-      send(message);
-
     } catch (error, stackTrace) {
       await _subscription?.cancel();
       _subscription = null;
       _channel = null;
+      _socketUrl = null;
       _isConnected = false;
-      _messagesController.addError(error, stackTrace);
+      _eventsController.addError(error, stackTrace);
       rethrow;
     }
   }
 
-
-
-  void send(String message) {
+  /// Sends a JSON event to the server.
+  void sendJson(Map<String, Object?> message) {
     final SocketChannel? channel = _channel;
     if (!_isConnected || channel == null) {
       throw StateError('Socket is not connected. Call connect() first.');
     }
 
-    channel.sink.add(message);
+    channel.sink.add(jsonEncode(message));
   }
 
+  /// Closes the active websocket connection.
   Future<void> disconnect() async {
     final StreamSubscription<dynamic>? subscription = _subscription;
     _subscription = null;
@@ -130,30 +97,65 @@ class SocketManager {
 
     final SocketChannel? channel = _channel;
     _channel = null;
+    _socketUrl = null;
     _isConnected = false;
     await channel?.sink.close();
   }
 
+  /// Releases transport resources.
   Future<void> dispose() async {
     await disconnect();
-    await _messagesController.close();
+    await _eventsController.close();
   }
 
-  static SocketChannel _defaultChannelFactory(Uri uri) {
-    return _WebSocketChannelAdapter(IOWebSocketChannel.connect(uri));
+  /// Turns a human-entered host string into a valid websocket URL.
+  static String normalizeSocketUrl(String input) {
+    final String trimmed = input.trim();
+    if (trimmed.isEmpty) {
+      return defaultSocketUrl();
+    }
+
+    if (trimmed.startsWith('ws://') || trimmed.startsWith('wss://')) {
+      return trimmed;
+    }
+
+    return 'ws://$trimmed';
   }
 
-  static String _resolveDefaultServerUrl() {
+  /// Default URL used when the user has not saved a server address yet.
+  static String defaultSocketUrl() {
     if (serverUrlOverride.isNotEmpty) {
       return serverUrlOverride;
     }
 
-    // Android emulator reaches host machine via 10.0.2.2, not localhost.
     if (Platform.isAndroid) {
       return 'ws://10.0.2.2:8765';
     }
 
     return 'ws://localhost:8765';
+  }
+
+  void _handleIncomingData(dynamic data) {
+    if (data is! String) {
+      _eventsController.addError(
+        StateError('Expected text websocket payload, got ${data.runtimeType}.'),
+      );
+      return;
+    }
+
+    final Object decoded = jsonDecode(data);
+    if (decoded is! Map<String, dynamic>) {
+      _eventsController.addError(
+        StateError('Expected JSON object payload, got ${decoded.runtimeType}.'),
+      );
+      return;
+    }
+
+    _eventsController.add(decoded);
+  }
+
+  static SocketChannel _defaultChannelFactory(Uri uri) {
+    return _WebSocketChannelAdapter(IOWebSocketChannel.connect(uri));
   }
 }
 

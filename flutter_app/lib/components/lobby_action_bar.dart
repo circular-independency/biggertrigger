@@ -6,19 +6,26 @@ import 'cyber_theme.dart';
 class LobbyActionBar extends StatelessWidget {
   const LobbyActionBar({
     super.key,
-    required this.isReady,
-    required this.onReadyTap,
-    required this.onStartTap,
+    required this.primaryLabel,
+    required this.secondaryLabel,
+    required this.icon,
+    required this.accent,
+    required this.isEnabled,
+    required this.onTap,
   });
 
-  final bool isReady;
-  final VoidCallback onReadyTap;
-  final VoidCallback onStartTap;
+  final String primaryLabel;
+  final String secondaryLabel;
+  final IconData icon;
+  final Color accent;
+  final bool isEnabled;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final Color accent = isReady ? CyberColors.lime : CyberColors.cyan;
-    final String label = isReady ? 'START' : 'READY UP';
+    final Color resolvedAccent = isEnabled
+        ? accent
+        : CyberColors.textMuted.withValues(alpha: 0.45);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -30,7 +37,7 @@ class LobbyActionBar extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: _chip('[INTEL_FEED]', CyberColors.lime),
+              child: _chip('[EMBED_SYNC]', CyberColors.lime),
             ),
           ],
         ),
@@ -38,18 +45,18 @@ class LobbyActionBar extends StatelessWidget {
         CyberPanel(
           padding: EdgeInsets.zero,
           borderRadius: 0,
-          borderColor: accent.withValues(alpha: 0.7),
-          glow: true,
+          borderColor: resolvedAccent.withValues(alpha: 0.7),
+          glow: isEnabled,
           child: Material(
             color: Colors.transparent,
             child: InkWell(
-              onTap: isReady ? onStartTap : onReadyTap,
+              onTap: isEnabled ? onTap : null,
               child: Ink(
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     colors: <Color>[
-                      accent.withValues(alpha: 0.95),
-                      accent.withValues(alpha: 0.65),
+                      resolvedAccent.withValues(alpha: 0.95),
+                      resolvedAccent.withValues(alpha: 0.65),
                     ],
                   ),
                 ),
@@ -58,35 +65,31 @@ class LobbyActionBar extends StatelessWidget {
                   child: Row(
                     children: <Widget>[
                       Icon(
-                        isReady ? Icons.play_arrow_rounded : Icons.bolt_rounded,
-                        color: isReady ? Colors.black : const Color(0xFF145065),
+                        icon,
+                        color: isEnabled ? Colors.black : Colors.black.withValues(alpha: 0.5),
                         size: 32,
                       ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Text(
-                          label,
+                          primaryLabel,
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            color: isReady ? Colors.black : const Color(0xFF165873),
+                            color: isEnabled
+                                ? Colors.black
+                                : Colors.black.withValues(alpha: 0.5),
                             fontSize: 30 / 1.5,
                             fontWeight: FontWeight.w800,
                             fontStyle: FontStyle.italic,
                           ),
                         ),
                       ),
-                      Icon(
-                        Icons.chevron_right_rounded,
-                        color: isReady ? Colors.black : const Color(0xFF145065),
-                        size: 34,
-                      ),
-                      const SizedBox(width: 6),
                       Text(
-                        'LVL 42 // ELITE',
+                        secondaryLabel,
                         style: TextStyle(
-                          color: isReady
-                              ? Colors.black.withValues(alpha: 0.7)
-                              : const Color(0xFF145065).withValues(alpha: 0.65),
+                          color: isEnabled
+                              ? Colors.black.withValues(alpha: 0.72)
+                              : Colors.black.withValues(alpha: 0.45),
                           fontSize: 11,
                           fontWeight: FontWeight.w700,
                         ),

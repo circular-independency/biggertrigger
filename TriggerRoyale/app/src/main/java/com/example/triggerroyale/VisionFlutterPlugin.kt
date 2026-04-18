@@ -381,7 +381,7 @@ class VisionFlutterPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         )
     }
 
-    private companion object {
+    companion object {
         private const val CHANNEL_NAME = "com.yourteam.visionmodule/vision"
 
         /**

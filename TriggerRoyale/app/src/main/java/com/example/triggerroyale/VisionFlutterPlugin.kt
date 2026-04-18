@@ -21,16 +21,19 @@ package com.example.triggerroyale
 // // result['targetId'], result['confidence'] present on HIT
 
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.view.Surface
+import android.Manifest
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.plugins.FlutterPlugin
@@ -139,6 +142,10 @@ class VisionFlutterPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         val embedder = imageEmbedderHelper
         if (context == null || registry == null || detector == null || embedder == null) {
             result.error("PREVIEW_FAILED", "Plugin is not fully initialized.", null)
+            return
+        }
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            result.error("PREVIEW_FAILED", "Camera permission is not granted.", null)
             return
         }
 

@@ -3,9 +3,18 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../components/cyber_theme.dart';
 import '../logic/vision_manager.dart';
+
+enum GameCameraPermissionState {
+  unknown,
+  requesting,
+  denied,
+  permanentlyDenied,
+  granted,
+}
 
 class GamePage extends StatefulWidget {
   const GamePage({super.key, VisionManager? visionManager})
@@ -17,11 +26,14 @@ class GamePage extends StatefulWidget {
   State<GamePage> createState() => _GamePageState();
 }
 
-class _GamePageState extends State<GamePage> {
+class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   int? _textureId;
   String? _error;
   bool _isLoading = true;
   bool _isUnsupported = false;
+  bool _isStartingPreview = false;
+  bool _hasShownInitialNotifications = false;
+  GameCameraPermissionState _permissionState = GameCameraPermissionState.unknown;
 
   final List<GameNotification> _notifications = <GameNotification>[];
   int _nextNotificationId = 0;
@@ -32,7 +44,15 @@ class _GamePageState extends State<GamePage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     unawaited(_configureGameScreen());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _isVisionPlatform && _textureId == null) {
+      unawaited(_ensurePermissionAndMaybeStartPreview(requestIfNeeded: false));
+    }
   }
 
   Future<void> _configureGameScreen() async {
@@ -41,16 +61,94 @@ class _GamePageState extends State<GamePage> {
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
     ]);
-    await _initializePreview();
+    await _ensurePermissionAndMaybeStartPreview(requestIfNeeded: true);
+  }
 
-    if (mounted && !_isUnsupported) {
-      showGameNotification('SECURE_LINK_ESTABLISHED', isGreen: true);
-      Future<void>.delayed(const Duration(milliseconds: 800), () {
-        if (mounted) {
-          showGameNotification('LOW_SIGNAL_ZONE_DETECTED', isGreen: false);
-        }
+  Future<void> _ensurePermissionAndMaybeStartPreview({
+    required bool requestIfNeeded,
+  }) async {
+    if (!_isVisionPlatform) {
+      setState(() {
+        _isUnsupported = true;
+        _isLoading = false;
       });
+      return;
     }
+
+    final bool hasPermission = await _ensureCameraPermission(
+      requestIfNeeded: requestIfNeeded,
+    );
+    if (!mounted) {
+      return;
+    }
+
+    if (!hasPermission) {
+      setState(() {
+        _isLoading = false;
+        _error = null;
+      });
+      return;
+    }
+
+    await _initializePreview();
+    _showInitialNotificationsIfNeeded();
+  }
+
+  Future<bool> _ensureCameraPermission({required bool requestIfNeeded}) async {
+    PermissionStatus status = await Permission.camera.status;
+    if (status.isGranted) {
+      _setPermissionState(GameCameraPermissionState.granted);
+      return true;
+    }
+
+    if (requestIfNeeded && (status.isDenied || status.isRestricted || status.isLimited)) {
+      _setPermissionState(GameCameraPermissionState.requesting);
+      status = await Permission.camera.request();
+    }
+
+    if (status.isGranted) {
+      _setPermissionState(GameCameraPermissionState.granted);
+      return true;
+    }
+
+    if (status.isPermanentlyDenied) {
+      _setPermissionState(GameCameraPermissionState.permanentlyDenied);
+      return false;
+    }
+
+    _setPermissionState(GameCameraPermissionState.denied);
+    return false;
+  }
+
+  void _setPermissionState(GameCameraPermissionState newState) {
+    if (!mounted || _permissionState == newState) {
+      return;
+    }
+    setState(() {
+      _permissionState = newState;
+    });
+  }
+
+  void _showInitialNotificationsIfNeeded() {
+    if (!mounted || _hasShownInitialNotifications || _isUnsupported || _textureId == null) {
+      return;
+    }
+
+    _hasShownInitialNotifications = true;
+    showGameNotification('SECURE_LINK_ESTABLISHED', isGreen: true);
+    Future<void>.delayed(const Duration(milliseconds: 800), () {
+      if (mounted) {
+        showGameNotification('LOW_SIGNAL_ZONE_DETECTED', isGreen: false);
+      }
+    });
+  }
+
+  Future<void> _requestCameraPermissionAgain() async {
+    await _ensurePermissionAndMaybeStartPreview(requestIfNeeded: true);
+  }
+
+  Future<void> _openPermissionSettings() async {
+    await openAppSettings();
   }
 
   Future<void> _initializePreview() async {
@@ -60,6 +158,18 @@ class _GamePageState extends State<GamePage> {
         _isLoading = false;
       });
       return;
+    }
+
+    if (_textureId != null || _isStartingPreview) {
+      return;
+    }
+
+    _isStartingPreview = true;
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+        _error = null;
+      });
     }
 
     try {
@@ -72,15 +182,35 @@ class _GamePageState extends State<GamePage> {
       setState(() {
         _textureId = textureId;
         _isLoading = false;
+        _permissionState = GameCameraPermissionState.granted;
       });
     } catch (e) {
       if (!mounted) {
         return;
       }
-      setState(() {
-        _error = 'Failed to initialize vision preview: $e';
-        _isLoading = false;
-      });
+
+      final String message = e.toString().toLowerCase();
+      if (message.contains('permission')) {
+        final PermissionStatus status = await Permission.camera.status;
+        if (!mounted) {
+          return;
+        }
+
+        setState(() {
+          _permissionState = status.isPermanentlyDenied
+              ? GameCameraPermissionState.permanentlyDenied
+              : GameCameraPermissionState.denied;
+          _error = null;
+          _isLoading = false;
+        });
+      } else {
+        setState(() {
+          _error = 'Failed to initialize vision preview: $e';
+          _isLoading = false;
+        });
+      }
+    } finally {
+      _isStartingPreview = false;
     }
   }
 
@@ -142,6 +272,7 @@ class _GamePageState extends State<GamePage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     if (_isVisionPlatform && _textureId != null) {
       unawaited(widget.visionManager.stopPreview());
     }
@@ -296,6 +427,11 @@ class _GamePageState extends State<GamePage> {
 
     final int? textureId = _textureId;
     if (textureId == null) {
+      if (_permissionState == GameCameraPermissionState.denied ||
+          _permissionState == GameCameraPermissionState.permanentlyDenied ||
+          _permissionState == GameCameraPermissionState.requesting) {
+        return _buildPermissionRecoveryPanel();
+      }
       return const Center(child: Text('Vision preview is not ready.'));
     }
 
@@ -331,6 +467,112 @@ class _GamePageState extends State<GamePage> {
         ),
         const IgnorePointer(child: _CrosshairOverlay()),
       ],
+    );
+  }
+
+  Widget _buildPermissionRecoveryPanel() {
+    final bool permanentlyDenied =
+        _permissionState == GameCameraPermissionState.permanentlyDenied;
+    final bool requesting = _permissionState == GameCameraPermissionState.requesting;
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: CyberColors.panel,
+              border: Border.all(
+                color: CyberColors.cyan.withValues(alpha: 0.45),
+                width: 1.2,
+              ),
+              boxShadow: const <BoxShadow>[
+                BoxShadow(color: Color(0x662DDAFF), blurRadius: 18),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text(
+                  '[CAMERA_ACCESS_REQUIRED]',
+                  style: TextStyle(
+                    color: CyberColors.amber,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.0,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Camera Permission Needed',
+                  style: TextStyle(
+                    color: CyberColors.textPrimary,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  permanentlyDenied
+                      ? 'Camera permission was permanently denied. Open app settings and allow camera access to continue.'
+                      : 'Camera access is required to start the vision preview.',
+                  style: const TextStyle(
+                    color: CyberColors.textMuted,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: OutlinedButton(
+                        style: OutlinedButton.styleFrom(
+                          side: BorderSide(
+                            color: CyberColors.cyan.withValues(alpha: 0.65),
+                          ),
+                          foregroundColor: CyberColors.cyan,
+                          shape: const RoundedRectangleBorder(
+                            borderRadius: BorderRadius.zero,
+                          ),
+                        ),
+                        onPressed: requesting
+                            ? null
+                            : () {
+                                unawaited(_requestCameraPermissionAgain());
+                              },
+                        child: Text(requesting ? 'REQUESTING...' : 'REQUEST AGAIN'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: CyberColors.lime,
+                          foregroundColor: Colors.black,
+                          shape: const RoundedRectangleBorder(
+                            borderRadius: BorderRadius.zero,
+                          ),
+                        ),
+                        onPressed: () {
+                          unawaited(_openPermissionSettings());
+                        },
+                        child: const Text(
+                          'OPEN SETTINGS',
+                          style: TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

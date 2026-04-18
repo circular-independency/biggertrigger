@@ -1,9 +1,12 @@
 import asyncio
 import websockets
 import json
+import os
 from websockets.exceptions import ConnectionClosed
 
 SHOT_DAMAGE = 25
+SERVER_HOST = os.getenv("WS_HOST", "0.0.0.0")
+SERVER_PORT = int(os.getenv("WS_PORT", "8765"))
 
 users = {}
 
@@ -96,7 +99,8 @@ async def handler(ws):
         await broadcast()
 
 async def main():
-    async with websockets.serve(handler, "localhost", 8765):
+    print(f"starting websocket server on ws://{SERVER_HOST}:{SERVER_PORT}")
+    async with websockets.serve(handler, SERVER_HOST, SERVER_PORT):
         await asyncio.Future()
 
 asyncio.run(main())

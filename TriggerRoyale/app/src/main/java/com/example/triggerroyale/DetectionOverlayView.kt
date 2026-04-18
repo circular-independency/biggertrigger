@@ -30,29 +30,66 @@ class DetectionOverlayView @JvmOverloads constructor(
         strokeWidth = strokeWidthPx
     }
 
+    /** Paint used for the result label. */
+    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.GREEN
+        textSize = 18f * resources.displayMetrics.density
+        style = Paint.Style.FILL
+    }
+
     /** Latest detection boxes in preview/screen coordinates. */
     private var detections: List<RectF> = emptyList()
 
+    /** Latest shoot result rendered on top of the debug rectangles. */
+    private var shootResult: ShootResult? = null
+
     /**
-     * Replaces the currently displayed detections.
+     * Replaces the currently displayed detections and result overlay.
      *
      * @param boxes Detection boxes already mapped into preview/screen coordinates.
+     * @param result Latest shoot result to render.
      */
-    fun setDetections(boxes: List<RectF>) {
+    fun setOverlayState(boxes: List<RectF>, result: ShootResult?) {
         detections = boxes.map(::RectF)
+        shootResult = result
         invalidate()
     }
 
-    /** Draws the currently stored detection rectangles directly in screen space. */
+    /** Clears all currently displayed boxes and result state. */
+    fun clear() {
+        detections = emptyList()
+        shootResult = null
+        invalidate()
+    }
+
+    /** Draws the currently stored detection rectangles and color-coded shoot result. */
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
 
-        if (detections.isEmpty()) {
-            return
+        val overlayColor = when (shootResult) {
+            is ShootResult.Miss -> Color.RED
+            is ShootResult.Unknown -> Color.rgb(255, 165, 0)
+            is ShootResult.Hit -> Color.GREEN
+            null -> Color.GREEN
         }
+        boxPaint.color = overlayColor
+        textPaint.color = overlayColor
 
         detections.forEach { box ->
             canvas.drawRect(box, boxPaint)
         }
+
+        val label = when (val result = shootResult) {
+            ShootResult.Miss -> "MISS"
+            ShootResult.Unknown -> "UNKNOWN"
+            is ShootResult.Hit -> "${result.playerId} ${(result.confidence * 100f).toInt()}%"
+            null -> null
+        } ?: return
+
+        canvas.drawText(label, LABEL_MARGIN_DP * resources.displayMetrics.density, textPaint.textSize + LABEL_MARGIN_DP * resources.displayMetrics.density, textPaint)
+    }
+
+    private companion object {
+        private const val LABEL_MARGIN_DP = 16f
     }
 }

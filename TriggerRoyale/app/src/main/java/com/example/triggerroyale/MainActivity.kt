@@ -3,8 +3,6 @@ package com.example.triggerroyale
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
-import android.graphics.PointF
-import android.graphics.RectF
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
@@ -20,10 +18,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
-import kotlin.math.hypot
 
 /**
  * Temporary native test harness for the Kotlin vision module.
@@ -52,6 +48,12 @@ class MainActivity : AppCompatActivity() {
     /** MediaPipe image embedder helper. Created during activity startup. */
     private var imageEmbedderHelper: ImageEmbedderHelper? = null
 
+    /** Holds the latest captured preview frame for the shoot pipeline. */
+    private val frameHolder = FrameHolder()
+
+    /** End-to-end shoot pipeline. Created once detector and embedder are both ready. */
+    private var shootPipeline: ShootPipeline? = null
+
     /**
      * Permission launcher for camera access.
      *
@@ -76,93 +78,32 @@ class MainActivity : AppCompatActivity() {
         initializeImageEmbedder()
 
         binding.shootButton.setOnClickListener {
-            val detector = objectDetectorHelper
-            if (detector == null) {
-                Toast.makeText(this, "Detector not ready", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            val embedder = imageEmbedderHelper
-            if (embedder == null) {
-                Toast.makeText(this, "Embedder not ready", Toast.LENGTH_SHORT).show()
+            val pipeline = shootPipeline
+            if (pipeline == null) {
+                Toast.makeText(this, "Shoot pipeline not ready", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
-            // Capture the frame exactly as the player sees it. This removes any need for image-to-
-            // preview coordinate mapping in the current MVP and avoids the noisy ImageProxy path.
-            val frame = binding.previewView.bitmap
-            if (frame == null) {
-                Toast.makeText(this, "No frame yet", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-
-            val imageCenter = PointF(frame.width / 2f, frame.height / 2f)
+            frameHolder.setLatest(binding.previewView.bitmap)
 
             activityScope.launch {
-                // Run ML and crop work off the main thread to keep the UI responsive.
-                val personBoxes = withContext(Dispatchers.Default) {
-                    detector.detect(frame)
-                }
+                val result = pipeline.shoot()
+                binding.detectionOverlay.setOverlayState(pipeline.lastMappedBoxes, result)
 
-                // The frame comes from PreviewView itself, so detector boxes are already in the
-                // same coordinate space as the on-screen preview and crosshair.
-                binding.detectionOverlay.setDetections(personBoxes)
-                Log.d(TAG, "Detected persons: ${personBoxes.size}")
-
-                if (personBoxes.isEmpty()) {
-                    Toast.makeText(this@MainActivity, MISS_NO_PERSON_MESSAGE, Toast.LENGTH_SHORT)
-                        .show()
-                    return@launch
-                }
-
-                val hitBoxes = personBoxes.filter { imageBox ->
-                    imageBox.contains(imageCenter.x, imageCenter.y)
-                }
-
-                if (hitBoxes.isEmpty()) {
-                    Toast.makeText(this@MainActivity, MISS_MESSAGE, Toast.LENGTH_SHORT).show()
-                    Log.d(TAG, "MISS \u2013 crosshair not inside any box")
-                    return@launch
-                }
-
-                val chosenHitBox = hitBoxes.minByOrNull { hitBox ->
-                    distanceBetweenCenters(hitBox, imageCenter)
-                } ?: return@launch
-
-                Log.d(TAG, "HIT \u2013 crosshair inside person box ${formatRect(chosenHitBox)}")
-
-                val cropFile = withContext(Dispatchers.Default) {
-                    val crop = CropHelper.cropPersonFromBitmap(frame, chosenHitBox)
-                    val shouldRejectAsBlurry =
-                        VisionConfig.enableBlurRejection &&
-                            CropHelper.isBlurry(crop, VisionConfig.blurThreshold)
-
-
-                    if (shouldRejectAsBlurry) {
-                        null
-                    } else {
-                        saveDebugCrop(crop)
+                when (result) {
+                    ShootResult.Miss -> {
+                        Log.d(TAG, "Shoot result: MISS")
+                    }
+                    ShootResult.Unknown -> {
+                        Log.d(TAG, "Shoot result: UNKNOWN")
+                    }
+                    is ShootResult.Hit -> {
+                        Log.d(
+                            TAG,
+                            "Shoot result: HIT ${result.playerId} confidence=${result.confidence}"
+                        )
                     }
                 }
-
-                if (cropFile == null) {
-                    Toast.makeText(this@MainActivity, UNKNOWN_BLURRY_MESSAGE, Toast.LENGTH_SHORT)
-                        .show()
-                    return@launch
-                }
-
-                Log.d(TAG, "Saved debug crop to ${cropFile.absolutePath}")
-
-                val embedding = withContext(Dispatchers.Default) {
-                    val crop = CropHelper.cropPersonFromBitmap(frame, chosenHitBox)
-                    embedder.embed(crop)
-                }
-
-                Log.d(TAG, "Embedding size: ${embedding.size}")
-                Toast.makeText(
-                    this@MainActivity,
-                    "Embedding OK \u2013 size ${embedding.size}",
-                    Toast.LENGTH_SHORT
-                ).show()
             }
         }
 
@@ -238,13 +179,16 @@ class MainActivity : AppCompatActivity() {
         }
 
         objectDetectorHelper = try {
-            ObjectDetectorHelper(this).also { helper ->
-                PlayerRegistry.objectDetectorHelper = helper
-            }
+            ObjectDetectorHelper(this)
         } catch (exception: Exception) {
             Log.e(TAG, "Failed to initialize object detector", exception)
             Toast.makeText(this, "Failed to initialize detector", Toast.LENGTH_SHORT).show()
             null
+        }
+
+        objectDetectorHelper?.let { helper ->
+            PlayerRegistry.objectDetectorHelper = helper
+            rebuildShootPipelineIfReady()
         }
     }
 
@@ -260,66 +204,37 @@ class MainActivity : AppCompatActivity() {
         }
 
         imageEmbedderHelper = try {
-            ImageEmbedderHelper(this).also { helper ->
-                PlayerRegistry.imageEmbedderHelper = helper
-            }
+            ImageEmbedderHelper(this)
         } catch (exception: Exception) {
             Log.e(TAG, "Failed to initialize image embedder", exception)
             Toast.makeText(this, "Failed to initialize embedder", Toast.LENGTH_SHORT).show()
             null
         }
-    }
 
-    /**
-     * Calculates the Euclidean distance between a box center and the crosshair center.
-     *
-     * When multiple person boxes overlap the crosshair, the closest center is treated as the
-     * selected target.
-     */
-    private fun distanceBetweenCenters(box: RectF, point: PointF): Double {
-        return hypot((box.centerX() - point.x).toDouble(), (box.centerY() - point.y).toDouble())
-    }
-
-    /**
-     * Saves a cropped bitmap as a JPEG into the app-specific external files directory.
-     *
-     * This is only for debugging right now so developers can inspect the exact crop that would be
-     * passed to future identification stages.
-     */
-    private fun saveDebugCrop(crop: Bitmap): File {
-        val outputDirectory = getExternalFilesDir(null) ?: filesDir
-        val outputFile = File(outputDirectory, "debug_crop_${System.currentTimeMillis()}.jpg")
-
-        FileOutputStream(outputFile).use { outputStream ->
-            crop.compress(Bitmap.CompressFormat.JPEG, DEBUG_CROP_JPEG_QUALITY, outputStream)
+        imageEmbedderHelper?.let { helper ->
+            PlayerRegistry.imageEmbedderHelper = helper
+            rebuildShootPipelineIfReady()
         }
-
-        return outputFile
     }
 
     /**
-     * Formats a rectangle for compact log output.
-     *
-     * Values are rounded to whole pixels to keep logcat easy to scan.
+     * Creates or refreshes the shoot pipeline once both MediaPipe helpers are available.
      */
-    private fun formatRect(rect: RectF): String {
-        return "[l=${rect.left.toInt()}, t=${rect.top.toInt()}, r=${rect.right.toInt()}, b=${rect.bottom.toInt()}]"
+    private fun rebuildShootPipelineIfReady() {
+        val detector = objectDetectorHelper ?: return
+        val embedder = imageEmbedderHelper ?: return
+
+        shootPipeline = ShootPipeline(
+            detectorHelper = detector,
+            embedderHelper = embedder,
+            frameHolder = frameHolder,
+            previewWidth = { binding.previewView.width },
+            previewHeight = { binding.previewView.height }
+        )
     }
 
     companion object {
         /** Tag used for logcat output from this activity. */
         private const val TAG = "MainActivity"
-
-        /** Player-facing message used when people are detected but the crosshair misses all boxes. */
-        private const val MISS_MESSAGE = "MISS"
-
-        /** Player-facing message used when shoot finds no detected person. */
-        private const val MISS_NO_PERSON_MESSAGE = "MISS \u2013 no person detected"
-
-        /** Player-facing message used when a target crop is too blurry for later use. */
-        private const val UNKNOWN_BLURRY_MESSAGE = "UNKNOWN \u2013 blurry frame"
-
-        /** JPEG quality for saved debug crops. */
-        private const val DEBUG_CROP_JPEG_QUALITY = 95
     }
 }

@@ -18,6 +18,14 @@ This repository currently contains the native Android MVP for the Kotlin vision 
   Simple data model describing one player's collected embeddings.
 - `app/src/main/java/com/example/triggerroyale/PlayerRegistry.kt`
   In-memory registration store with registration, import/export, and read/clear helpers.
+- `app/src/main/java/com/example/triggerroyale/FrameHolder.kt`
+  Thread-safe holder for the latest frame passed into the shoot pipeline.
+- `app/src/main/java/com/example/triggerroyale/EmbeddingMatcher.kt`
+  Compares a query embedding against the stored player registry using cosine similarity.
+- `app/src/main/java/com/example/triggerroyale/ShootResult.kt`
+  Sealed result type for `Miss`, `Unknown`, and `Hit(playerId, confidence)`.
+- `app/src/main/java/com/example/triggerroyale/ShootPipeline.kt`
+  End-to-end shoot flow: frame -> detect -> crosshair filter -> crop -> blur check -> embed -> match.
 - `app/src/main/java/com/example/triggerroyale/CoordinateMapper.kt`
   Utility for mapping between image-space and preview-space rectangles. It is currently kept for future use if preview and analysis spaces diverge again.
 - `app/src/main/java/com/example/triggerroyale/CropHelper.kt`
@@ -63,17 +71,17 @@ When `SHOOT` is pressed:
 2. Detection runs on `Dispatchers.Default`.
 3. MediaPipe returns detection results for the full frame.
 4. The code keeps only detections whose top category is `person`.
-5. The detected rectangles are drawn directly on the debug overlay.
-6. The center of the captured bitmap is treated as the crosshair point.
-7. If no person is detected, the app shows `MISS – no person detected`.
-8. If people are detected but the bitmap center is not inside any person box, the app shows `MISS` and logs a crosshair miss.
-9. If multiple person boxes contain the bitmap center, the app picks the one whose center is closest to the bitmap center.
-10. The chosen image-space box is cropped from the captured bitmap.
-11. The crop is checked for blur using Laplacian variance.
-12. If the crop is blurry, the app shows `UNKNOWN – blurry frame`.
-13. If the crop is sharp enough, it is saved as a JPEG in the app-specific external files directory and the file path is logged.
-14. The non-blurry crop is embedded with MediaPipe Image Embedder.
-15. The app logs the embedding size and shows `Embedding OK – size <n>`.
+5. The image-space boxes are mapped into preview-space through `CoordinateMapper`.
+6. The crosshair center is the middle of the preview.
+7. If the crosshair is not inside any mapped box, the shot is `Miss`.
+8. If multiple mapped boxes overlap the crosshair, the pipeline picks the box whose center is closest to the crosshair center.
+9. The chosen image-space box is cropped from the original bitmap.
+10. If blur rejection is enabled and the crop is blurry, the result is `Unknown`.
+11. The crop is embedded with MediaPipe Image Embedder.
+12. If no players are registered, the result is `Unknown`.
+13. The query embedding is matched against `PlayerRegistry` with cosine similarity.
+14. If the best score meets the matcher threshold, the result is `Hit(playerId, confidence)`.
+15. Otherwise, the result is `Unknown`.
 
 ## Image embedding pipeline
 
@@ -141,6 +149,54 @@ Supported registry APIs:
 - `getAll()`
 - `clear()`
 - `playerCount()`
+
+## Identity matching
+
+Identity matching is handled by `EmbeddingMatcher`.
+
+Matching rule:
+
+- every stored player can have multiple embeddings
+- the query embedding is compared to every stored embedding for every player
+- cosine similarity is computed as a dot product because embeddings are already L2-normalized
+- each player's score is the maximum similarity across their stored embeddings
+- the best overall player is accepted only if their score meets the threshold
+
+Current default matcher threshold:
+
+- `VisionConfig.matchThreshold` (currently `0.30`)
+
+If the best score is below threshold, the pipeline returns `Unknown`.
+
+## Shoot pipeline
+
+The app now uses `ShootPipeline` to own the full shoot flow.
+
+Dependencies injected into `ShootPipeline`:
+
+- `ObjectDetectorHelper`
+- `ImageEmbedderHelper`
+- `FrameHolder`
+- preview width supplier
+- preview height supplier
+
+`FrameHolder` currently stores the latest `PreviewView.bitmap` captured by `MainActivity` when the player presses `SHOOT`.
+
+`ShootResult` values:
+
+- `Miss`
+  No valid target was under the crosshair.
+- `Unknown`
+  A target path existed, but blur rejection, missing registrations, or failed identity matching prevented a confident identification.
+- `Hit(playerId, confidence)`
+  A registered player was matched with the given similarity score.
+
+UI rendering:
+
+- `Miss` is shown in red.
+- `Unknown` is shown in orange.
+- `Hit` is shown in green with the player id and confidence.
+- The debug overlay uses the mapped preview-space rectangles from the pipeline's latest run.
 
 ## Coordinate spaces
 
@@ -237,6 +293,8 @@ Flutter will eventually own UI composition and call into the Kotlin side through
 - Keep one source of truth for tunable settings in `VisionConfig.kt` so experiments stay easy to reason about.
 - Keep crop extraction and blur scoring inside `CropHelper` so future embedding code can stay focused on identification.
 - Keep registration and JSON serialization concerns inside `PlayerRegistry` so UI or networking code can stay thin.
+- Keep similarity logic inside `EmbeddingMatcher` so matching policy changes stay isolated.
+- Keep the end-to-end shot flow inside `ShootPipeline` so `MainActivity` remains a thin UI/controller layer.
 - Keep detection and embedding wrappers separate so model-specific MediaPipe details stay out of `MainActivity`.
 - If memory pressure becomes an issue later, profile before optimizing. The current goal is a working end-to-end loop, not a final performance pass.
 - If you add cropping, embedding, or server sync next, document where each stage runs and what coordinate space it expects.

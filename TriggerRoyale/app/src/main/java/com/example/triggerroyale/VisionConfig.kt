@@ -25,6 +25,13 @@ object VisionConfig {
     const val detectorScoreThreshold = 0.4f
 
     /**
+     * Minimum cosine-similarity score required to accept an identity match.
+     *
+     * Lower values make matching more permissive. Higher values make matching stricter.
+     */
+    const val matchThreshold = 0.30f
+
+    /**
      * Enables blur rejection for extracted crops.
      *
      * Set this to `false` to always accept the crop even when it has very low edge detail.

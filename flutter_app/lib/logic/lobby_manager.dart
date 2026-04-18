@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'socket_manager.dart';
 
 enum LobbyStatus {
@@ -42,6 +44,7 @@ class LobbyPlayer {
 
 class LobbyManager {
   LobbyStatus _status = LobbyStatus.pending;
+  SocketManager? _socketManager;
 
   final List<LobbyPlayer> _players = <LobbyPlayer>[];
 
@@ -55,6 +58,10 @@ class LobbyManager {
       _players.where((LobbyPlayer p) => !p.isPlaceholder).length;
 
   int get totalOperativeSlots => 8;
+
+  void attachSocketManager(SocketManager socketManager) {
+    _socketManager = socketManager;
+  }
 
   void updatePlayersFromSocket(Map<String, SocketLobbyUser> users) {
     final List<MapEntry<String, SocketLobbyUser>> sortedEntries =
@@ -103,6 +110,10 @@ class LobbyManager {
 
   void setReady() {
     _status = LobbyStatus.active;
+    final SocketManager? socketManager = _socketManager;
+    if (socketManager != null) {
+      unawaited(socketManager.sendReady(ready: true));
+    }
 
     if (_players.isNotEmpty) {
       _players[0] = _players[0].copyWith(

@@ -34,6 +34,7 @@ class _LobbyPageState extends State<LobbyPage> {
   @override
   void initState() {
     super.initState();
+    widget.lobbyManager.attachSocketManager(widget.socketManager);
     _usersSubscription = widget.socketManager.usersUpdates.listen(
       (Map<String, SocketLobbyUser> users) {
         if (!mounted) {

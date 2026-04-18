@@ -116,6 +116,16 @@ class SocketManager {
     return _username!;
   }
 
+  Future<void> sendReady({required bool ready}) async {
+    final String username = await _getUsername();
+    final String message = jsonEncode(<String, dynamic>{
+      'type': 'ready',
+      'username': username,
+      'ready': ready,
+    });
+    send(message);
+  }
+
   Future<void> connect() async {
     if (_isConnected) {
       return;

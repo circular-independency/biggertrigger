@@ -53,6 +53,14 @@ async def handler(ws):
                 print("all users:", users.keys())
 
                 await broadcast()
+
+            if data["type"] == "ready":
+                username = data["username"]
+
+                users[username]["ready"] = data["ready"]
+                print("is ready:", username)
+                
+                await broadcast()
             
             if data["type"] == "shoot":
                 shooter_ws = ws

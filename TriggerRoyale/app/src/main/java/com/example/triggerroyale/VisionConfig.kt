@@ -7,6 +7,12 @@ package com.example.triggerroyale
  * without searching through camera or ML code.
  */
 object VisionConfig {
+    /** Preferred ImageAnalysis width used by the Flutter plugin preview pipeline. */
+    const val analysisWidth = 640
+
+    /** Preferred ImageAnalysis height used by the Flutter plugin preview pipeline. */
+    const val analysisHeight = 480
+
     /** Asset path of the MediaPipe-compatible object detection model in `app/src/main/assets`. */
     const val detectorModelAssetPath = "efficientdet_lite0.tflite"
 

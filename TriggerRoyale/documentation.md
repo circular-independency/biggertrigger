@@ -1,21 +1,38 @@
 # TriggerRoyale Android Vision Notes
 
-This repository currently contains the native Android MVP for the Kotlin vision module that will later be exposed to Flutter as a plugin. The current app is intentionally small: it opens the back camera, shows a preview, draws a crosshair overlay, grabs the current preview frame when the `SHOOT` button is pressed, runs person detection on that frame, chooses the person box under the centered crosshair, extracts a debug body crop, rejects blurry crops, and saves sharp crops for inspection.
+This repository now contains two native entry points for the same Kotlin vision stack:
+
+- a temporary Android test harness in `MainActivity`
+- a Flutter-facing plugin in `VisionFlutterPlugin`
+
+The shared vision flow is:
+
+- get the latest frame
+- detect `person` boxes
+- keep the target under the centered crosshair
+- crop the selected body
+- optionally reject blurry crops
+- embed the crop
+- match against registered players
 
 ## Current structure
 
 - `app/src/main/java/com/example/triggerroyale/MainActivity.kt`
-  Owns camera permission handling, CameraX preview setup, detector lifecycle, hit-testing, crop saving, and the temporary `SHOOT` button behavior.
+  Native test harness used to validate the vision loop without Flutter.
+- `app/src/main/java/com/example/triggerroyale/VisionFlutterPlugin.kt`
+  Flutter plugin entrypoint that exposes texture preview, registration, import/export, and `shoot()` through a method channel.
+- `app/src/main/java/com/example/triggerroyale/AppLifecycleOwner.kt`
+  Minimal always-resumed lifecycle owner used when the plugin is initialized from an application context instead of an `Activity`.
 - `app/src/main/java/com/example/triggerroyale/CrosshairOverlayView.kt`
-  Draws the crosshair overlay on top of the preview.
+  Draws the native test harness crosshair overlay.
 - `app/src/main/java/com/example/triggerroyale/DetectionOverlayView.kt`
-  Draws debug detection rectangles in preview/screen coordinates.
+  Draws debug rectangles and shoot state in the native test harness.
 - `app/src/main/java/com/example/triggerroyale/ObjectDetectorHelper.kt`
   Wraps MediaPipe Object Detector setup and image-mode inference.
 - `app/src/main/java/com/example/triggerroyale/ImageEmbedderHelper.kt`
   Wraps MediaPipe Image Embedder setup and one-shot embedding inference.
 - `app/src/main/java/com/example/triggerroyale/PlayerEmbedding.kt`
-  Simple data model describing one player's collected embeddings.
+  Data model describing one player's collected embeddings.
 - `app/src/main/java/com/example/triggerroyale/PlayerRegistry.kt`
   In-memory registration store with registration, import/export, and read/clear helpers.
 - `app/src/main/java/com/example/triggerroyale/FrameHolder.kt`
@@ -27,32 +44,50 @@ This repository currently contains the native Android MVP for the Kotlin vision 
 - `app/src/main/java/com/example/triggerroyale/ShootPipeline.kt`
   End-to-end shoot flow: frame -> detect -> crosshair filter -> crop -> blur check -> embed -> match.
 - `app/src/main/java/com/example/triggerroyale/CoordinateMapper.kt`
-  Utility for mapping between image-space and preview-space rectangles. It is currently kept for future use if preview and analysis spaces diverge again.
+  Utility for mapping between image-space and preview-space rectangles.
 - `app/src/main/java/com/example/triggerroyale/CropHelper.kt`
-  Extracts person crops from the captured bitmap and rejects blurry crops using Laplacian variance.
+  Extracts person crops and rejects blurry crops using Laplacian variance.
 - `app/src/main/java/com/example/triggerroyale/VisionConfig.kt`
-  Central place for tunable detector/embedder settings such as model asset paths, max results, score threshold, and blur rejection options.
+  Central place for tunable analysis, detector, embedder, match, and blur settings.
 - `app/src/main/res/layout/activity_main.xml`
-  Defines the preview, debug detection overlay, crosshair overlay, and `SHOOT` button.
+  Native test harness layout for preview, debug overlay, crosshair, and `SHOOT`.
 - `app/build.gradle.kts`
-  Holds Android and dependency configuration, including CameraX and MediaPipe Tasks.
+  Android and dependency configuration, including CameraX, MediaPipe Tasks, and Flutter embedding compile-time support.
+- `flutter_integration.md`
+  Exact Flutter integration guide for the developer wiring the plugin into the Flutter app.
 
 ## Camera pipeline
 
-`MainActivity` currently binds one CameraX use case:
+The repository currently uses two camera flows.
 
-- `Preview`
-  Sends frames to `PreviewView` so the player can aim.
+### Native test harness (`MainActivity`)
 
-The shoot pipeline grabs the current frame directly from `PreviewView.bitmap`.
+- binds only `Preview`
+- renders into `PreviewView`
+- reads `PreviewView.bitmap` on demand when `SHOOT` is pressed
 
-Why the app uses `PreviewView.bitmap` right now:
+Why this path exists:
 
 - it keeps detection, hit-testing, cropping, and the visible preview in one coordinate space
 - it avoids continuous `ImageProxy` to `Bitmap` conversion on every frame
 - it avoids noisy gralloc errors seen on some Mali devices in the continuous conversion path
 
-This is a practical MVP choice. A future plugin version can move back to a dedicated analysis pipeline if it becomes necessary for performance or direct ML input handling.
+### Flutter plugin (`VisionFlutterPlugin`)
+
+- binds `Preview` and `ImageAnalysis`
+- renders `Preview` into a Flutter texture
+- keeps the latest upright analysis bitmap in `FrameHolder`
+- runs the native `shoot()` pipeline from that stored frame
+
+Current plugin `ImageAnalysis` settings:
+
+- preferred resolution: `VisionConfig.analysisWidth` x `VisionConfig.analysisHeight`
+- fallback rule: closest higher, then lower
+- backpressure strategy: `STRATEGY_KEEP_ONLY_LATEST`
+- output format: `OUTPUT_IMAGE_FORMAT_RGBA_8888`
+- analyzer executor: single background thread
+
+The plugin path is the intended integration path for the Flutter app.
 
 ## Object detection pipeline
 
@@ -60,28 +95,17 @@ The project uses MediaPipe Object Detector in `IMAGE` mode through `ObjectDetect
 
 Current detector settings:
 
-- Model asset: `efficientdet_lite0.tflite`
-- Max results: `10`
-- Score threshold: `0.4`
-- Running mode: `RunningMode.IMAGE`
+- model asset: `efficientdet_lite0.tflite`
+- max results: `VisionConfig.detectorMaxResults`
+- score threshold: `VisionConfig.detectorScoreThreshold`
+- running mode: `RunningMode.IMAGE`
 
-When `SHOOT` is pressed:
+Detection behavior:
 
-1. The current preview bitmap is read from `PreviewView.bitmap`.
-2. Detection runs on `Dispatchers.Default`.
-3. MediaPipe returns detection results for the full frame.
-4. The code keeps only detections whose top category is `person`.
-5. The image-space boxes are mapped into preview-space through `CoordinateMapper`.
-6. The crosshair center is the middle of the preview.
-7. If the crosshair is not inside any mapped box, the shot is `Miss`.
-8. If multiple mapped boxes overlap the crosshair, the pipeline picks the box whose center is closest to the crosshair center.
-9. The chosen image-space box is cropped from the original bitmap.
-10. If blur rejection is enabled and the crop is blurry, the result is `Unknown`.
-11. The crop is embedded with MediaPipe Image Embedder.
-12. If no players are registered, the result is `Unknown`.
-13. The query embedding is matched against `PlayerRegistry` with cosine similarity.
-14. If the best score meets the matcher threshold, the result is `Hit(playerId, confidence)`.
-15. Otherwise, the result is `Unknown`.
+1. The current upright bitmap is passed to MediaPipe.
+2. MediaPipe returns detection results for the full frame.
+3. The code keeps only detections whose top category is `person`.
+4. Bounding boxes are returned in bitmap pixel coordinates.
 
 ## Image embedding pipeline
 
@@ -89,26 +113,25 @@ The project uses MediaPipe Image Embedder in `IMAGE` mode through `ImageEmbedder
 
 Current embedder settings:
 
-- Model asset: `mobilenet_v3_small.tflite`
-- Quantize: `false`
+- model asset: `mobilenet_v3_small.tflite`
+- quantize: `false`
 - L2 normalize: `true`
-- Running mode: `RunningMode.IMAGE`
+- running mode: `RunningMode.IMAGE`
 
 Important embedder note:
 
-- The embedder asset must be added manually to `app/src/main/assets/mobilenet_v3_small.tflite`.
-- `l2Normalize(true)` is intentionally enabled so cosine similarity can later be computed as a simple dot product.
+- the embedder asset must be added manually to `app/src/main/assets/mobilenet_v3_small.tflite`
+- `l2Normalize(true)` is intentionally enabled so cosine similarity can be computed as a dot product
 
 Embedding flow:
 
-1. A non-blurry crop is wrapped as an `MPImage`.
+1. A non-rejected crop is wrapped as an `MPImage`.
 2. MediaPipe produces one or more embeddings.
 3. The first float embedding is returned.
-4. The app logs the embedding vector size and shows a success toast.
 
 ## Player registration system
 
-The project now includes an in-memory player embedding registry through `PlayerRegistry`.
+The project includes an in-memory player embedding registry through `PlayerRegistry`.
 
 Registry data model:
 
@@ -121,7 +144,7 @@ Registration flow in `PlayerRegistry.register(playerId, bitmaps)`:
 2. If multiple people are found, keep the largest detected person box.
 3. If no person is found, skip that bitmap.
 4. Crop the selected person box.
-5. If the crop is blurry, skip it.
+5. If blur rejection is enabled and the crop is blurry, skip it.
 6. Embed the crop.
 7. Store the resulting `FloatArray`.
 8. Merge all accepted embeddings into the registry under that `playerId`.
@@ -130,14 +153,13 @@ If every bitmap is skipped, `register(...)` throws `IllegalArgumentException`.
 
 Dependency injection:
 
-- `PlayerRegistry` does not create MediaPipe helpers itself.
-- `ObjectDetectorHelper` and `ImageEmbedderHelper` are injected into the registry as `lateinit` vars during app startup.
-- `MainActivity` assigns those dependencies when each helper initializes successfully.
+- `PlayerRegistry` does not create MediaPipe helpers itself
+- `ObjectDetectorHelper` and `ImageEmbedderHelper` are injected into the registry during app or plugin startup
 
 Serialization format:
 
-- Float vectors are serialized as JSON arrays of numbers.
-- The full registry is serialized as:
+- float vectors are serialized as JSON arrays of numbers
+- the full registry is serialized as:
   `{ "playerId": [[0.1, 0.2, ...], [...]], "otherPlayer": [[...]] }`
 
 Supported registry APIs:
@@ -164,13 +186,13 @@ Matching rule:
 
 Current default matcher threshold:
 
-- `VisionConfig.matchThreshold` (currently `0.30`)
+- `VisionConfig.matchThreshold`
 
 If the best score is below threshold, the pipeline returns `Unknown`.
 
 ## Shoot pipeline
 
-The app now uses `ShootPipeline` to own the full shoot flow.
+`ShootPipeline` owns the full shoot flow.
 
 Dependencies injected into `ShootPipeline`:
 
@@ -179,8 +201,6 @@ Dependencies injected into `ShootPipeline`:
 - `FrameHolder`
 - preview width supplier
 - preview height supplier
-
-`FrameHolder` currently stores the latest `PreviewView.bitmap` captured by `MainActivity` when the player presses `SHOOT`.
 
 `ShootResult` values:
 
@@ -191,30 +211,30 @@ Dependencies injected into `ShootPipeline`:
 - `Hit(playerId, confidence)`
   A registered player was matched with the given similarity score.
 
-UI rendering:
+High-level shoot flow:
 
-- `Miss` is shown in red.
-- `Unknown` is shown in orange.
-- `Hit` is shown in green with the player id and confidence.
-- The debug overlay uses the mapped preview-space rectangles from the pipeline's latest run.
+1. Read the latest frame from `FrameHolder`.
+2. Run person detection.
+3. Map candidate boxes into preview space.
+4. Keep only boxes containing the centered crosshair.
+5. If more than one box survives, choose the one whose center is closest to the crosshair center.
+6. Crop the chosen image-space box.
+7. Optionally reject blurry crops.
+8. Embed the crop.
+9. Match against `PlayerRegistry`.
+
+The native test harness also renders the last mapped boxes and result state in `DetectionOverlayView`.
 
 ## Coordinate spaces
 
-The current MVP deliberately keeps everything in one coordinate space:
+There are two important coordinate spaces:
 
-- the player sees `PreviewView`
-- `PreviewView.bitmap` captures that same displayed frame
-- MediaPipe runs on that captured bitmap
-- hit-testing is done against boxes from that bitmap
-- crop extraction uses that same bitmap
+- image space: pixel coordinates in the analyzed bitmap
+- preview space: coordinates in the displayed preview surface
 
-That means the current pipeline does not need preview-to-image coordinate conversion for hit-testing.
+`CoordinateMapper` exists so overlay rendering and hit-testing can stay correct when those spaces differ because of scaling or cropping.
 
-`CoordinateMapper` is still kept in the project because it will become useful again if:
-
-- the crosshair is no longer fixed at center
-- the app returns to a separate `ImageAnalysis` pipeline
-- future ML stages run on a frame whose coordinate space differs from the displayed preview
+The current native test harness often stays close to a single visible space because it captures `PreviewView.bitmap`, but the plugin path uses a proper analysis bitmap and preview texture, so keeping mapping logic centralized is still the right long-term design.
 
 ## Crop extraction and blur rejection
 
@@ -232,69 +252,70 @@ After a target box is selected, `CropHelper` handles the next stage.
 - computes the variance of those responses
 - treats the crop as blurry when the variance is below the configured threshold
 
-Current blur threshold:
-
-- `80.0`
-
-If the crop is sharp enough, the app saves it as:
-
-- `debug_crop_<timestamp>.jpg`
-
-Location:
-
-- app-specific external files directory from `getExternalFilesDir(null)`
-
-This saved file is only for debugging right now. It gives developers a direct way to inspect what future embedding logic would receive.
+If the crop is accepted in the native test harness, the app can save a debug JPEG crop to the app-specific external files directory.
 
 ## Settings you are likely to change
 
 These settings are centralized in `VisionConfig.kt`:
 
-- Detector model
+- analysis resolution
+  Change `analysisWidth` and `analysisHeight` to experiment with the speed/accuracy tradeoff in the Flutter plugin pipeline.
+- detector model
   Change `detectorModelAssetPath` if you want to test a different MediaPipe-compatible object detection model.
-- Embedder model
+- embedder model
   Change `embedderModelAssetPath` if you want to test a different MediaPipe-compatible image embedding model.
-- Detector result count
+- detector result count
   Change `detectorMaxResults`.
-- Detector confidence threshold
+- detector confidence threshold
   Change `detectorScoreThreshold`.
-- Blur rejection enabled
-  Change `enableBlurRejection` to `false` if you want to skip blur rejection entirely.
-- Blur threshold
+- match threshold
+  Change `matchThreshold` to control how strict identity matching is.
+  Lower values accept weaker matches. Higher values require stronger similarity.
+- blur rejection enabled
+  Change `enableBlurRejection` to `false` to skip blur rejection entirely.
+- blur threshold
   Change `blurThreshold` to control how strict blur rejection is.
   Lower values reject fewer frames. Higher values reject more frames.
 
-These settings still live in `MainActivity.kt`:
+These settings still live outside `VisionConfig.kt`:
 
-- Camera lens
-  Replace `CameraSelector.DEFAULT_BACK_CAMERA` if front camera support is ever needed.
-- Hit-selection behavior
-  The current target-selection rule is: choose the overlapping box whose center is closest to the bitmap center.
-- Debug crop quality
-  Change `DEBUG_CROP_JPEG_QUALITY` in `MainActivity.kt` if you want smaller or larger debug files.
+- camera lens
+  Both entry points currently use `CameraSelector.DEFAULT_BACK_CAMERA`.
+- native debug UI behavior
+  `MainActivity` owns the temporary overlay/toast/log behavior used for testing.
 
-## Planned evolution toward the Flutter plugin
+## Flutter integration summary
 
-The long-term architecture is still for the Kotlin module to own:
+Channel name:
 
-- CameraX lifecycle
-- Preview surface or texture output
-- Frame analysis or capture pipeline
-- `shoot()` entrypoint
+- `com.yourteam.visionmodule/vision`
 
-Flutter will eventually own UI composition and call into the Kotlin side through a plugin or platform channel. The current native screen is just a test harness for validating the vision loop before the Flutter integration is added.
+Exposed methods:
+
+- `startPreview() -> Long textureId`
+- `stopPreview() -> null`
+- `registerPlayer({ playerId, imageBytes }) -> { storedCount }`
+- `exportEmbeddings({ playerId }) -> String`
+- `exportAll() -> String`
+- `importEmbeddings({ json }) -> null`
+- `shoot() -> { result, targetId?, confidence? }`
+- `clearRegistrations() -> null`
+
+Plugin registration:
+
+- `VisionFlutterPlugin` implements `FlutterPlugin`
+- because this repository is not packaged as a standalone Flutter pub plugin, the Flutter host should register it explicitly
+- the host can call `VisionFlutterPlugin.registerWith(flutterEngine)` or add `VisionFlutterPlugin()` directly to `flutterEngine.plugins`
+
+Read `flutter_integration.md` before wiring the Flutter side. That file is the integration contract for the Flutter developer.
 
 ## Practical guidance for future contributors
 
 - Keep CameraX setup isolated and explicit. Small helper methods are preferred over large lifecycle methods.
-- Avoid mixing ML logic directly into UI click handlers.
-- Keep preview capture, target detection, and crop extraction separate from future embedding logic.
-- Keep coordinate mapping centralized in `CoordinateMapper` so overlay rendering and future hit-testing cannot drift apart.
-- Keep one source of truth for tunable settings in `VisionConfig.kt` so experiments stay easy to reason about.
-- Keep crop extraction and blur scoring inside `CropHelper` so future embedding code can stay focused on identification.
-- Keep registration and JSON serialization concerns inside `PlayerRegistry` so UI or networking code can stay thin.
-- Keep similarity logic inside `EmbeddingMatcher` so matching policy changes stay isolated.
-- Keep the end-to-end shot flow inside `ShootPipeline` so `MainActivity` remains a thin UI/controller layer.
-- Keep detection and embedding wrappers separate so model-specific MediaPipe details stay out of `MainActivity`.
-- If memory pressure becomes an issue later, profile before optimizing. The current goal is a working end-to-end loop, not a final performance pass.
-- If you add cropping, embedding, or server sync next, document where each stage runs and what coordinate space it expects.
+- Avoid mixing ML logic directly into UI click handlers or channel handlers.
+- Keep detector, embedder, matcher, and registry responsibilities separate.
+- Keep one source of truth for tunable settings in `VisionConfig.kt`.
+- Keep coordinate mapping centralized in `CoordinateMapper` so overlay rendering and hit-testing cannot drift apart.
+- Keep the end-to-end shot flow inside `ShootPipeline` so activities and plugins stay thin.
+- Keep Flutter integration concerns inside `VisionFlutterPlugin` instead of spreading channel logic across unrelated classes.
+- If memory or latency becomes an issue later, profile first. The current goal is a correct end-to-end MVP, not a final performance pass.

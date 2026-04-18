@@ -1,6 +1,7 @@
 import asyncio
 import websockets
 import json
+from websockets.exceptions import ConnectionClosed
 
 SHOT_DAMAGE = 25
 
@@ -83,6 +84,9 @@ async def handler(ws):
                     print(f"{target_name} was shot by {shooter}")
                     shoot_player(shooter, target_name)
                     await broadcast()
+    except ConnectionClosed as exc:
+        user_label = username if username else "unknown-user"
+        print(f"connection closed for {user_label}: code={exc.code}, reason={exc.reason}")
 
     finally:
         if username and username in users:

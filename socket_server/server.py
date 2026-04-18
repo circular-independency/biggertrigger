@@ -9,6 +9,7 @@ SERVER_HOST = os.getenv("WS_HOST", "0.0.0.0")
 SERVER_PORT = int(os.getenv("WS_PORT", "8765"))
 
 users = {}
+match_started = False
 
 async def broadcast():
     msg = json.dumps({
@@ -25,6 +26,36 @@ async def broadcast():
 
     await asyncio.gather(*[
         ws.send(msg)
+        for ws in [u["ws"] for u in users.values()]
+    ])
+
+async def maybe_start_match():
+    global match_started
+
+    if not users:
+        match_started = False
+        return
+
+    everyone_ready = all(info.get("ready", False) for info in users.values())
+    if not everyone_ready:
+        match_started = False
+        return
+
+    if match_started:
+        return
+
+    start_msg = json.dumps({
+        "type": "start",
+        "embeddings": {
+            name: info.get("embeddings", [])
+            for name, info in users.items()
+        }
+    })
+
+    match_started = True
+    print("all players ready: sending start")
+    await asyncio.gather(*[
+        ws.send(start_msg)
         for ws in [u["ws"] for u in users.values()]
     ])
 
@@ -66,6 +97,7 @@ async def handler(ws):
                 print("is ready:", username)
                 
                 await broadcast()
+                await maybe_start_match()
 
             if data["type"] == "embedding":
                 username = data["username"]
@@ -76,6 +108,7 @@ async def handler(ws):
                     users[username]["ready"] = True
                     print(f"embeddings received: {username}, count={len(embeddings)}")
                     await broadcast()
+                    await maybe_start_match()
             
             if data["type"] == "shoot":
                 shooter_ws = ws
@@ -103,9 +136,11 @@ async def handler(ws):
         print(f"connection closed for {user_label}: code={exc.code}, reason={exc.reason}")
 
     finally:
+        global match_started
         if username and username in users:
             print("left:", username)
             del users[username]
+            match_started = False
 
         await broadcast()
 

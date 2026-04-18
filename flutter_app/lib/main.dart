@@ -30,7 +30,11 @@ class DragonHackApp extends StatelessWidget {
         mainMenuRoute: (context) => const MainMenuPage(),
         lobbyRoute: (context) => LobbyPage(),
         settingsRoute: (context) => const SettingsPage(),
-        gameRoute: (context) => const GamePage(),
+        gameRoute: (context) {
+          final Object? args = ModalRoute.of(context)?.settings.arguments;
+          final GameStartData? startData = args is GameStartData ? args : null;
+          return GamePage(startData: startData);
+        },
       },
     );
   }

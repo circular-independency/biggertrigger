@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../components/cyber_theme.dart';
+import '../logic/socket_manager.dart';
 import '../logic/vision_manager.dart';
 
 enum GameCameraPermissionState {
@@ -17,11 +18,25 @@ enum GameCameraPermissionState {
   granted,
 }
 
+class GameStartData {
+  const GameStartData({
+    required this.embeddingsByPlayer,
+    this.socketManager,
+  });
+
+  final Map<String, List<List<double>>> embeddingsByPlayer;
+  final SocketManager? socketManager;
+}
+
 class GamePage extends StatefulWidget {
-  const GamePage({super.key, VisionManager? visionManager})
-    : visionManager = visionManager ?? const VisionManager();
+  const GamePage({
+    super.key,
+    VisionManager? visionManager,
+    this.startData,
+  }) : visionManager = visionManager ?? const VisionManager();
 
   final VisionManager visionManager;
+  final GameStartData? startData;
 
   @override
   State<GamePage> createState() => _GamePageState();
@@ -43,6 +58,10 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
 
   final List<GameNotification> _notifications = <GameNotification>[];
   int _nextNotificationId = 0;
+  Map<String, List<List<double>>> _playerEmbeddingsByName =
+      <String, List<List<double>>>{};
+  List<String> _playerIds = <String>[];
+  SocketManager? _socketManager;
 
   bool get _isVisionPlatform =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
@@ -50,8 +69,43 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    _applyStartData(widget.startData);
     WidgetsBinding.instance.addObserver(this);
     unawaited(_configureGameScreen());
+  }
+
+  void _applyStartData(GameStartData? startData) {
+    if (startData == null) {
+      return;
+    }
+
+    final Map<String, List<List<double>>> copied =
+        <String, List<List<double>>>{};
+    startData.embeddingsByPlayer.forEach((String key, List<List<double>> value) {
+      copied[key] = value
+          .map((List<double> embedding) => List<double>.from(embedding))
+          .toList(growable: false);
+    });
+
+    _playerEmbeddingsByName = copied;
+    _playerIds = copied.keys.toList(growable: false)..sort();
+    _socketManager = startData.socketManager;
+  }
+
+  Future<void> _sendHitToServer(String targetUser) async {
+    final SocketManager? socketManager = _socketManager;
+    if (socketManager == null || !socketManager.isConnected) {
+      return;
+    }
+
+    try {
+      socketManager.sendShoot(targetUser: targetUser);
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      showGameNotification('HIT SYNC FAILED', isGreen: false);
+    }
   }
 
   @override
@@ -147,6 +201,20 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
 
     _hasShownInitialNotifications = true;
     showGameNotification('SECURE_LINK_ESTABLISHED', isGreen: true);
+    if (_playerIds.isNotEmpty) {
+      final int totalVectors = _playerEmbeddingsByName.values.fold<int>(
+        0,
+        (int sum, List<List<double>> vectors) => sum + vectors.length,
+      );
+      Future<void>.delayed(const Duration(milliseconds: 450), () {
+        if (mounted) {
+          showGameNotification(
+            'EMBEDDINGS_SYNCED: ${_playerIds.length} OPS / $totalVectors VECTORS',
+            isGreen: true,
+          );
+        }
+      });
+    }
     Future<void>.delayed(const Duration(milliseconds: 800), () {
       if (mounted) {
         showGameNotification('LOW_SIGNAL_ZONE_DETECTED', isGreen: false);
@@ -266,6 +334,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
       switch (type) {
         case 'HIT':
           final String target = result['targetId']?.toString() ?? 'TARGET';
+          unawaited(_sendHitToServer(target));
           showGameNotification('HIT: $target', isGreen: true);
           break;
         case 'UNKNOWN':

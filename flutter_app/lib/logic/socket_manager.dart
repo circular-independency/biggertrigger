@@ -26,6 +26,14 @@ class SocketLobbyUser {
   final bool ready;
 }
 
+class SocketStartPayload {
+  const SocketStartPayload({
+    required this.embeddingsByUser,
+  });
+
+  final Map<String, List<List<double>>> embeddingsByUser;
+}
+
 class SocketManager {
   SocketManager({SocketChannelFactory? channelFactory, String? socketUrlIn})
     : _channelFactory = channelFactory ?? _defaultChannelFactory,
@@ -42,6 +50,8 @@ class SocketManager {
       StreamController<String>.broadcast();
   final StreamController<Map<String, SocketLobbyUser>> _usersController =
       StreamController<Map<String, SocketLobbyUser>>.broadcast();
+  final StreamController<SocketStartPayload> _startController =
+      StreamController<SocketStartPayload>.broadcast();
 
   StreamSubscription<dynamic>? _subscription;
   SocketChannel? _channel;
@@ -52,6 +62,7 @@ class SocketManager {
   Stream<String> get messages => _messagesController.stream;
 
   Stream<Map<String, SocketLobbyUser>> get usersUpdates => _usersController.stream;
+  Stream<SocketStartPayload> get startUpdates => _startController.stream;
 
   void handleData(String strData) {
     final dynamic decoded = jsonDecode(strData);
@@ -88,6 +99,46 @@ class SocketManager {
       case 'hit':
         final String hitter = decoded['from']?.toString() ?? 'Unknown';
         _messagesController.add('[$hitter] hit you');
+        break;
+      case 'start':
+        final dynamic rawEmbeddings = decoded['embeddings'];
+        if (rawEmbeddings is! Map) {
+          _messagesController.addError(
+            StateError('Invalid start payload: embeddings map is missing.'),
+          );
+          return;
+        }
+
+        final Map<String, List<List<double>>> embeddingsByUser =
+            <String, List<List<double>>>{};
+        rawEmbeddings.forEach((dynamic key, dynamic value) {
+          if (key is! String || value is! List) {
+            return;
+          }
+
+          final List<List<double>> parsedEmbeddings = <List<double>>[];
+          for (final dynamic embedding in value) {
+            if (embedding is! List) {
+              continue;
+            }
+
+            final List<double> vector = <double>[];
+            for (final dynamic n in embedding) {
+              if (n is num) {
+                vector.add(n.toDouble());
+              }
+            }
+            if (vector.isNotEmpty) {
+              parsedEmbeddings.add(vector);
+            }
+          }
+
+          embeddingsByUser[key] = parsedEmbeddings;
+        });
+
+        _startController.add(
+          SocketStartPayload(embeddingsByUser: embeddingsByUser),
+        );
         break;
       default:
         break;
@@ -139,6 +190,14 @@ class SocketManager {
       'type': 'embedding',
       'username': username,
       'embeddings': embeddings,
+    });
+    send(message);
+  }
+
+  void sendShoot({required String targetUser}) {
+    final String message = jsonEncode(<String, dynamic>{
+      'type': 'shoot',
+      'user': targetUser,
     });
     send(message);
   }
@@ -223,6 +282,7 @@ class SocketManager {
     await disconnect();
     await _messagesController.close();
     await _usersController.close();
+    await _startController.close();
   }
 
   static SocketChannel _defaultChannelFactory(Uri uri) {

@@ -16,6 +16,7 @@ import '../logic/socket_manager.dart';
 import '../logic/user_preferences_manager.dart';
 import '../logic/vision_manager.dart';
 import '../main.dart';
+import 'game_page.dart';
 
 class LobbyPage extends StatefulWidget {
   LobbyPage({
@@ -40,9 +41,13 @@ class _LobbyPageState extends State<LobbyPage> {
 
   bool _isConnecting = true;
   bool _didNavigateAway = false;
+  bool _didNavigateToGame = false;
 
   StreamSubscription<Map<String, SocketLobbyUser>>? _usersSubscription;
   StreamSubscription<String>? _messagesSubscription;
+  StreamSubscription<SocketStartPayload>? _startSubscription;
+  Map<String, SocketLobbyUser> _latestUsers = <String, SocketLobbyUser>{};
+  String _currentUsername = 'COMMANDER_01';
 
   LobbyRegistrationOverlayStage? _registrationStage;
   CameraController? _registrationCameraController;
@@ -59,6 +64,7 @@ class _LobbyPageState extends State<LobbyPage> {
   @override
   void initState() {
     super.initState();
+    unawaited(_loadCurrentUsername());
     widget.lobbyManager.attachSocketManager(widget.socketManager);
     _usersSubscription = widget.socketManager.usersUpdates.listen(
       (Map<String, SocketLobbyUser> users) {
@@ -66,8 +72,15 @@ class _LobbyPageState extends State<LobbyPage> {
           return;
         }
         setState(() {
+          _latestUsers = users;
           widget.lobbyManager.updatePlayersFromSocket(users);
         });
+      },
+    );
+    _startSubscription = widget.socketManager.startUpdates.listen(
+      _handleStartPayload,
+      onError: (Object error) {
+        _goToHomeWithError(error);
       },
     );
     _messagesSubscription = widget.socketManager.messages.listen(
@@ -77,6 +90,50 @@ class _LobbyPageState extends State<LobbyPage> {
       },
     );
     _connectSocket();
+  }
+
+  Future<void> _loadCurrentUsername() async {
+    final String stored = (await UserPreferencesManager.getUsername())?.trim() ?? '';
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _currentUsername = stored.isEmpty ? 'COMMANDER_01' : stored;
+    });
+  }
+
+  bool _isLocalUserReady() {
+    if (widget.lobbyManager.getCurrentStatus() == LobbyStatus.active) {
+      return true;
+    }
+
+    final SocketLobbyUser? localUser = _latestUsers[_currentUsername];
+    return localUser?.ready ?? false;
+  }
+
+  void _handleStartPayload(SocketStartPayload payload) {
+    if (!mounted || _didNavigateAway || _didNavigateToGame) {
+      return;
+    }
+
+    if (!_isLocalUserReady()) {
+      return;
+    }
+
+    _didNavigateToGame = true;
+    _cancelRegistrationFlow();
+    Navigator.pushNamed(
+      context,
+      DragonHackApp.gameRoute,
+      arguments: GameStartData(
+        embeddingsByPlayer: payload.embeddingsByUser,
+        socketManager: widget.socketManager,
+      ),
+    ).whenComplete(() {
+      if (mounted) {
+        _didNavigateToGame = false;
+      }
+    });
   }
 
   Future<void> _connectSocket() async {
@@ -391,6 +448,7 @@ class _LobbyPageState extends State<LobbyPage> {
   @override
   void dispose() {
     _registrationSessionToken += 1;
+    _startSubscription?.cancel();
     _messagesSubscription?.cancel();
     _usersSubscription?.cancel();
     widget.socketManager.disconnect();
@@ -456,15 +514,11 @@ class _LobbyPageState extends State<LobbyPage> {
                           SizedBox(height: gap * 1.2),
                           LobbyActionBar(
                             isReady: isReady,
+                            startEnabled: false,
                             onReadyTap: () {
                               unawaited(_openRegistrationOverlay());
                             },
-                            onStartTap: () {
-                              Navigator.pushNamed(
-                                context,
-                                DragonHackApp.gameRoute,
-                              );
-                            },
+                            onStartTap: () {},
                           ),
                           SizedBox(height: gap * 0.4),
                         ],

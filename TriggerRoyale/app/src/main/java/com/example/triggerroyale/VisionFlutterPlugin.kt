@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
+import android.graphics.PointF
+import android.graphics.RectF
 import android.graphics.Rect
 import android.graphics.YuvImage
 import io.flutter.embedding.engine.FlutterEngine
@@ -18,6 +20,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import kotlin.math.hypot
 
 /**
  * Flutter-facing plugin entrypoint for the native vision module.
@@ -343,43 +346,52 @@ class VisionFlutterPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
             return ShootResult.Miss
         }
 
+        val crosshairCenter = PointF(bitmap.width / 2f, bitmap.height / 2f)
+        val crosshairRadius = VisionConfig.crosshairRadiusPx
+        val crosshairCandidates = imageBoxes.filter { box ->
+            box.contains(crosshairCenter.x, crosshairCenter.y) ||
+                distanceBetweenCenters(box, crosshairCenter) <= crosshairRadius
+        }
+
+        if (crosshairCandidates.isEmpty()) {
+            return ShootResult.Miss
+        }
+
+        val selectedBox = crosshairCandidates.minByOrNull { box ->
+            distanceBetweenCenters(box, crosshairCenter)
+        } ?: return ShootResult.Miss
+
+        val crop = CropHelper.cropPersonFromBitmap(bitmap, selectedBox)
+        if (VisionConfig.enableBlurRejection &&
+            CropHelper.isBlurry(crop, VisionConfig.blurThreshold)
+        ) {
+            return ShootResult.Unknown
+        }
+
+        val embedding = try {
+            embedder.embed(crop)
+        } catch (_: Exception) {
+            return ShootResult.Unknown
+        }
+
         if (PlayerRegistry.playerCount() == 0) {
             return ShootResult.Unknown
         }
 
-        var bestPlayerId: String? = null
-        var bestConfidence = Float.NEGATIVE_INFINITY
-        for (box in imageBoxes) {
-            val crop = CropHelper.cropPersonFromBitmap(bitmap, box)
-            if (VisionConfig.enableBlurRejection &&
-                CropHelper.isBlurry(crop, VisionConfig.blurThreshold)
-            ) {
-                continue
-            }
-
-            val embedding = try {
-                embedder.embed(crop)
-            } catch (_: Exception) {
-                continue
-            }
-
-            val match = EmbeddingMatcher.findBestMatch(
-                queryEmbedding = embedding,
-                registry = PlayerRegistry.getAll(),
-                threshold = VisionConfig.matchThreshold
-            ) ?: continue
-
-            if (match.second > bestConfidence) {
-                bestPlayerId = match.first
-                bestConfidence = match.second
-            }
-        }
-
-        return if (bestPlayerId != null) {
-            ShootResult.Hit(bestPlayerId, bestConfidence)
+        val match = EmbeddingMatcher.findBestMatch(
+            queryEmbedding = embedding,
+            registry = PlayerRegistry.getAll(),
+            threshold = VisionConfig.matchThreshold
+        )
+        return if (match != null) {
+            ShootResult.Hit(match.first, match.second)
         } else {
             ShootResult.Unknown
         }
+    }
+
+    private fun distanceBetweenCenters(box: RectF, point: PointF): Double {
+        return hypot((box.centerX() - point.x).toDouble(), (box.centerY() - point.y).toDouble())
     }
 
     private fun byteAt(bytes: ByteArray, index: Int): Byte {

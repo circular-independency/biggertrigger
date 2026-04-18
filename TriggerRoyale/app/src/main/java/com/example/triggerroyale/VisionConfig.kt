@@ -7,6 +7,9 @@ package com.example.triggerroyale
  * without searching through camera or ML code.
  */
 object VisionConfig {
+    /** Radius in pixels around frame center treated as crosshair hit zone. */
+    const val crosshairRadiusPx = 60f
+
     /** Preferred ImageAnalysis width used by the Flutter plugin preview pipeline. */
     const val analysisWidth = 640
 

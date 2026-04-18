@@ -1,89 +1,50 @@
 package com.example.triggerroyale
 
-// Dart side usage:
-//
-// final _channel = MethodChannel('com.yourteam.visionmodule/vision');
-//
-// final int textureId = await _channel.invokeMethod('startPreview');
-// // render with: Texture(textureId: textureId)
-//
-// await _channel.invokeMethod('registerPlayer', {
-//   'playerId': 'alice',
-//   'imageBytes': [jpegBytes1, jpegBytes2, ...]  // Uint8List from Flutter camera
-// });
-//
-// final String json = await _channel.invokeMethod('exportEmbeddings', {'playerId': 'alice'});
-// // send json to other players, then:
-// await _channel.invokeMethod('importEmbeddings', {'json': receivedJson});
-//
-// final Map result = await _channel.invokeMethod('shoot');
-// // result['result'] == 'MISS' | 'UNKNOWN' | 'HIT'
-// // result['targetId'], result['confidence'] present on HIT
-
 import android.content.Context
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Matrix
-import android.view.Surface
-import android.Manifest
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.Preview
-import androidx.camera.core.resolutionselector.ResolutionSelector
-import androidx.camera.core.resolutionselector.ResolutionStrategy
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.LifecycleOwner
+import android.graphics.ImageFormat
+import android.graphics.Rect
+import android.graphics.YuvImage
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
-import io.flutter.view.TextureRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
+import java.io.ByteArrayOutputStream
 
 /**
  * Flutter-facing plugin entrypoint for the native vision module.
  *
  * This plugin exposes:
- * - Texture-based camera preview
+ * - frame-based shoot pipeline
  * - player registration/import/export
  * - end-to-end `shoot()` identity matching
  */
 class VisionFlutterPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
+    private data class YuvFramePlane(
+        val bytes: ByteArray,
+        val rowStride: Int,
+        val pixelStride: Int
+    )
+
     private var applicationContext: Context? = null
-    private var textureRegistry: TextureRegistry? = null
     private var binaryMessenger: BinaryMessenger? = null
     private var methodChannel: MethodChannel? = null
 
     private val pluginScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
-    private val analysisExecutor: ExecutorService = Executors.newSingleThreadExecutor()
 
     private var objectDetectorHelper: ObjectDetectorHelper? = null
     private var imageEmbedderHelper: ImageEmbedderHelper? = null
-    private val frameHolder = FrameHolder()
-    private var shootPipeline: ShootPipeline? = null
-
-    private var cameraProvider: ProcessCameraProvider? = null
-    private var previewUseCase: Preview? = null
-    private var imageAnalysisUseCase: ImageAnalysis? = null
-    private var surfaceTextureEntry: TextureRegistry.SurfaceTextureEntry? = null
-    private var previewSurface: Surface? = null
-    private var previewBufferWidth = 0
-    private var previewBufferHeight = 0
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         applicationContext = binding.applicationContext
-        textureRegistry = binding.textureRegistry
         binaryMessenger = binding.binaryMessenger
 
         methodChannel = MethodChannel(
@@ -96,13 +57,11 @@ class VisionFlutterPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
-            "startPreview" -> startPreview(result)
-            "stopPreview" -> stopPreview(result)
+            "shootFrame" -> shootFrame(call, result)
             "registerPlayer" -> registerPlayer(call, result)
             "exportEmbeddings" -> exportEmbeddings(call, result)
             "exportAll" -> result.success(PlayerRegistry.exportAll())
             "importEmbeddings" -> importEmbeddings(call, result)
-            "shoot" -> shoot(result)
             "clearRegistrations" -> {
                 PlayerRegistry.clear()
                 result.success(null)
@@ -113,133 +72,64 @@ class VisionFlutterPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         methodChannel?.setMethodCallHandler(null)
-        stopPreviewInternal()
         pluginScope.cancel()
-        cameraExecutor.shutdown()
-        analysisExecutor.shutdown()
         objectDetectorHelper?.close()
         imageEmbedderHelper?.close()
         objectDetectorHelper = null
         imageEmbedderHelper = null
-        shootPipeline = null
         applicationContext = null
-        textureRegistry = null
         binaryMessenger = null
         methodChannel = null
     }
 
-    /** Starts CameraX preview bound to a Flutter texture and returns the texture id. */
-    private fun startPreview(result: MethodChannel.Result) {
+    /** Processes a Flutter camera frame and returns a shoot result map. */
+    private fun shootFrame(call: MethodCall, result: MethodChannel.Result) {
         val initializationError = ensureVisionHelpers()
         if (initializationError != null) {
-            result.error("PREVIEW_FAILED", initializationError, null)
+            result.error("SHOOT_FAILED", initializationError, null)
             return
         }
 
-        val context = applicationContext
-        val registry = textureRegistry
-        val detector = objectDetectorHelper
-        val embedder = imageEmbedderHelper
-        if (context == null || registry == null || detector == null || embedder == null) {
-            result.error("PREVIEW_FAILED", "Plugin is not fully initialized.", null)
+        val width = (call.argument<Number>("width"))?.toInt() ?: -1
+        val height = (call.argument<Number>("height"))?.toInt() ?: -1
+        val rawPlanes = call.argument<List<Any?>>("planes") ?: emptyList()
+
+        if (width <= 0 || height <= 0 || rawPlanes.size < 3) {
+            result.error("SHOOT_FAILED", "Invalid frame payload.", null)
             return
         }
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            result.error("PREVIEW_FAILED", "Camera permission is not granted.", null)
+
+        val planes = parsePlanes(rawPlanes)
+        if (planes == null) {
+            result.error("SHOOT_FAILED", "Invalid frame planes payload.", null)
             return
         }
 
         pluginScope.launch {
             try {
-                stopPreviewInternal()
-
-                val textureEntry = registry.createSurfaceTexture()
-                surfaceTextureEntry = textureEntry
-                val provider = withContext(Dispatchers.Default) {
-                    ProcessCameraProvider.getInstance(context).get()
-                }
-                cameraProvider = provider
-
-                val lifecycleOwner = (context as? LifecycleOwner) ?: AppLifecycleOwner
-
-                previewUseCase = Preview.Builder()
-                    .build()
-                    .also { preview ->
-                        preview.setSurfaceProvider { request ->
-                            previewBufferWidth = request.resolution.width
-                            previewBufferHeight = request.resolution.height
-                            textureEntry.surfaceTexture().setDefaultBufferSize(
-                                previewBufferWidth,
-                                previewBufferHeight
-                            )
-
-                            val surface = Surface(textureEntry.surfaceTexture())
-                            previewSurface = surface
-                            request.provideSurface(surface, cameraExecutor) { }
-                        }
-                    }
-
-                imageAnalysisUseCase = ImageAnalysis.Builder()
-                    .setResolutionSelector(
-                        ResolutionSelector.Builder()
-                            .setResolutionStrategy(
-                                ResolutionStrategy(
-                                    android.util.Size(
-                                        VisionConfig.analysisWidth,
-                                        VisionConfig.analysisHeight
-                                    ),
-                                    ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER
-                                )
-                            )
-                            .build()
+                val shootResult = withContext(Dispatchers.Default) {
+                    val bitmap = decodeToUprightBitmap(
+                        width = width,
+                        height = height,
+                        planes = planes
                     )
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                    .build()
-                    .also { analysis ->
-                        analysis.setAnalyzer(analysisExecutor) { imageProxy ->
-                            val bitmap = imageProxy.toBitmap()
-                            val rotationDegrees = imageProxy.imageInfo.rotationDegrees
-                            imageProxy.close()
-
-                            frameHolder.setLatest(rotateBitmap(bitmap, rotationDegrees))
-                        }
-                    }
-
-                provider.unbindAll()
-                provider.bindToLifecycle(
-                    lifecycleOwner,
-                    CameraSelector.DEFAULT_BACK_CAMERA,
-                    previewUseCase,
-                    imageAnalysisUseCase
-                )
-
-                shootPipeline = ShootPipeline(
-                    detectorHelper = detector,
-                    embedderHelper = embedder,
-                    frameHolder = frameHolder,
-                    previewWidth = {
-                        if (previewBufferWidth > 0) previewBufferWidth
-                        else frameHolder.getLatest()?.width ?: 0
-                    },
-                    previewHeight = {
-                        if (previewBufferHeight > 0) previewBufferHeight
-                        else frameHolder.getLatest()?.height ?: 0
-                    }
-                )
-
-                result.success(textureEntry.id())
+                    evaluateFrame(bitmap)
+                }
+                when (shootResult) {
+                    ShootResult.Miss -> result.success(mapOf("result" to "MISS"))
+                    ShootResult.Unknown -> result.success(mapOf("result" to "UNKNOWN"))
+                    is ShootResult.Hit -> result.success(
+                        mapOf(
+                            "result" to "HIT",
+                            "targetId" to shootResult.playerId,
+                            "confidence" to shootResult.confidence.toDouble()
+                        )
+                    )
+                }
             } catch (exception: Exception) {
-                stopPreviewInternal()
-                result.error("PREVIEW_FAILED", exception.message, null)
+                result.error("SHOOT_FAILED", exception.message, null)
             }
         }
-    }
-
-    /** Stops CameraX preview and releases the Flutter texture. */
-    private fun stopPreview(result: MethodChannel.Result) {
-        stopPreviewInternal()
-        result.success(null)
     }
 
     /** Registers a player from JPEG-encoded bytes provided by Flutter. */
@@ -308,59 +198,6 @@ class VisionFlutterPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         }
     }
 
-    /** Runs the full shoot pipeline and returns a simple Flutter-friendly result map. */
-    private fun shoot(result: MethodChannel.Result) {
-        val initializationError = ensureVisionHelpers()
-        if (initializationError != null) {
-            result.error("SHOOT_FAILED", initializationError, null)
-            return
-        }
-
-        val pipeline = shootPipeline
-        if (pipeline == null) {
-            result.error("SHOOT_FAILED", "Shoot pipeline not ready.", null)
-            return
-        }
-
-        pluginScope.launch {
-            try {
-                when (val shootResult = pipeline.shoot()) {
-                    ShootResult.Miss -> result.success(mapOf("result" to "MISS"))
-                    ShootResult.Unknown -> result.success(mapOf("result" to "UNKNOWN"))
-                    is ShootResult.Hit -> result.success(
-                        mapOf(
-                            "result" to "HIT",
-                            "targetId" to shootResult.playerId,
-                            "confidence" to shootResult.confidence.toDouble()
-                        )
-                    )
-                }
-            } catch (exception: Exception) {
-                result.error("SHOOT_FAILED", exception.message, null)
-            }
-        }
-    }
-
-    /** Rebuilds the shoot pipeline once both helpers are available. */
-    private fun rebuildShootPipelineIfReady() {
-        val detector = objectDetectorHelper ?: return
-        val embedder = imageEmbedderHelper ?: return
-
-        shootPipeline = ShootPipeline(
-            detectorHelper = detector,
-            embedderHelper = embedder,
-            frameHolder = frameHolder,
-            previewWidth = {
-                if (previewBufferWidth > 0) previewBufferWidth
-                else frameHolder.getLatest()?.width ?: 0
-            },
-            previewHeight = {
-                if (previewBufferHeight > 0) previewBufferHeight
-                else frameHolder.getLatest()?.height ?: 0
-            }
-        )
-    }
-
     /**
      * Lazily initializes ML helpers so startup crashes are avoided when vision dependencies are not
      * available on the current device/runtime.
@@ -390,7 +227,6 @@ class VisionFlutterPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
 
             PlayerRegistry.objectDetectorHelper = detector
             PlayerRegistry.imageEmbedderHelper = embedder
-            rebuildShootPipelineIfReady()
             return null
         } catch (throwable: Throwable) {
             if (createdDetector) {
@@ -409,46 +245,148 @@ class VisionFlutterPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                 }
                 imageEmbedderHelper = null
             }
-            shootPipeline = null
             val message = throwable.message ?: throwable::class.java.simpleName
             return "Vision initialization failed: $message"
         }
     }
 
-    /** Stops and releases all preview-related resources without touching the method result. */
-    private fun stopPreviewInternal() {
-        cameraProvider?.unbindAll()
-        imageAnalysisUseCase = null
-        previewUseCase = null
-        previewSurface?.release()
-        previewSurface = null
-        surfaceTextureEntry?.release()
-        surfaceTextureEntry = null
-        previewBufferWidth = 0
-        previewBufferHeight = 0
-        frameHolder.setLatest(null)
-        rebuildShootPipelineIfReady()
+    private fun parsePlanes(rawPlanes: List<Any?>): List<YuvFramePlane>? {
+        val planes = mutableListOf<YuvFramePlane>()
+        for (rawPlane in rawPlanes.take(3)) {
+            val map = rawPlane as? Map<*, *> ?: return null
+            val bytes = map["bytes"] as? ByteArray ?: return null
+            val rowStride = (map["bytesPerRow"] as? Number)?.toInt() ?: return null
+            val pixelStride = (map["bytesPerPixel"] as? Number)?.toInt() ?: 1
+            if (rowStride <= 0 || pixelStride <= 0) {
+                return null
+            }
+            planes += YuvFramePlane(
+                bytes = bytes,
+                rowStride = rowStride,
+                pixelStride = pixelStride
+            )
+        }
+        return planes
     }
 
-    /** Rotates an analyzed frame into upright orientation before storing it in `FrameHolder`. */
-    private fun rotateBitmap(bitmap: Bitmap, rotationDegrees: Int): Bitmap {
-        if (rotationDegrees == 0) {
-            return bitmap
+    private fun decodeToUprightBitmap(
+        width: Int,
+        height: Int,
+        planes: List<YuvFramePlane>
+    ): Bitmap {
+        if (planes.size < 3) {
+            throw IllegalArgumentException("YUV420_888 frame must include 3 planes.")
         }
-
-        val matrix = Matrix().apply {
-            postRotate(rotationDegrees.toFloat())
-        }
-
-        return Bitmap.createBitmap(
-            bitmap,
-            0,
-            0,
-            bitmap.width,
-            bitmap.height,
-            matrix,
-            true
+        val nv21 = yuv420888ToNv21(
+            width = width,
+            height = height,
+            yPlane = planes[0],
+            uPlane = planes[1],
+            vPlane = planes[2]
         )
+
+        val jpegBytes = ByteArrayOutputStream().use { stream ->
+            val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
+            val ok = yuvImage.compressToJpeg(Rect(0, 0, width, height), 95, stream)
+            if (!ok) {
+                throw IllegalStateException("Failed to compress frame to JPEG.")
+            }
+            stream.toByteArray()
+        }
+
+        return BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
+            ?: throw IllegalStateException("Failed to decode frame bitmap.")
+    }
+
+    private fun yuv420888ToNv21(
+        width: Int,
+        height: Int,
+        yPlane: YuvFramePlane,
+        uPlane: YuvFramePlane,
+        vPlane: YuvFramePlane
+    ): ByteArray {
+        val frameSize = width * height
+        val nv21 = ByteArray(frameSize + frameSize / 2)
+
+        var yOffset = 0
+        for (row in 0 until height) {
+            val rowStart = row * yPlane.rowStride
+            for (col in 0 until width) {
+                val index = rowStart + col * yPlane.pixelStride
+                nv21[yOffset++] = byteAt(yPlane.bytes, index)
+            }
+        }
+
+        val chromaWidth = width / 2
+        val chromaHeight = height / 2
+        var chromaOffset = frameSize
+        for (row in 0 until chromaHeight) {
+            val uRowStart = row * uPlane.rowStride
+            val vRowStart = row * vPlane.rowStride
+            for (col in 0 until chromaWidth) {
+                val uIndex = uRowStart + col * uPlane.pixelStride
+                val vIndex = vRowStart + col * vPlane.pixelStride
+                nv21[chromaOffset++] = byteAt(vPlane.bytes, vIndex)
+                nv21[chromaOffset++] = byteAt(uPlane.bytes, uIndex)
+            }
+        }
+
+        return nv21
+    }
+
+    private fun evaluateFrame(bitmap: Bitmap): ShootResult {
+        val detector = objectDetectorHelper ?: return ShootResult.Unknown
+        val embedder = imageEmbedderHelper ?: return ShootResult.Unknown
+
+        val imageBoxes = detector.detect(bitmap)
+        if (imageBoxes.isEmpty()) {
+            return ShootResult.Miss
+        }
+
+        if (PlayerRegistry.playerCount() == 0) {
+            return ShootResult.Unknown
+        }
+
+        var bestPlayerId: String? = null
+        var bestConfidence = Float.NEGATIVE_INFINITY
+        for (box in imageBoxes) {
+            val crop = CropHelper.cropPersonFromBitmap(bitmap, box)
+            if (VisionConfig.enableBlurRejection &&
+                CropHelper.isBlurry(crop, VisionConfig.blurThreshold)
+            ) {
+                continue
+            }
+
+            val embedding = try {
+                embedder.embed(crop)
+            } catch (_: Exception) {
+                continue
+            }
+
+            val match = EmbeddingMatcher.findBestMatch(
+                queryEmbedding = embedding,
+                registry = PlayerRegistry.getAll(),
+                threshold = VisionConfig.matchThreshold
+            ) ?: continue
+
+            if (match.second > bestConfidence) {
+                bestPlayerId = match.first
+                bestConfidence = match.second
+            }
+        }
+
+        return if (bestPlayerId != null) {
+            ShootResult.Hit(bestPlayerId, bestConfidence)
+        } else {
+            ShootResult.Unknown
+        }
+    }
+
+    private fun byteAt(bytes: ByteArray, index: Int): Byte {
+        if (index < 0 || index >= bytes.size) {
+            return 0
+        }
+        return bytes[index]
     }
 
     private companion object {

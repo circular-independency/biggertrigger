@@ -1,5 +1,48 @@
 import 'package:flutter/services.dart';
 
+class VisionFramePlane {
+  const VisionFramePlane({
+    required this.bytes,
+    required this.bytesPerRow,
+    required this.bytesPerPixel,
+  });
+
+  final Uint8List bytes;
+  final int bytesPerRow;
+  final int? bytesPerPixel;
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'bytes': bytes,
+      'bytesPerRow': bytesPerRow,
+      'bytesPerPixel': bytesPerPixel,
+    };
+  }
+}
+
+class VisionFrame {
+  const VisionFrame({
+    required this.width,
+    required this.height,
+    required this.rotationDegrees,
+    required this.planes,
+  });
+
+  final int width;
+  final int height;
+  final int rotationDegrees;
+  final List<VisionFramePlane> planes;
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'width': width,
+      'height': height,
+      'rotationDegrees': rotationDegrees,
+      'planes': planes.map((VisionFramePlane plane) => plane.toMap()).toList(),
+    };
+  }
+}
+
 class VisionException implements Exception {
   VisionException(this.message);
 
@@ -15,37 +58,18 @@ class VisionManager {
   static const MethodChannel _channel =
       MethodChannel('com.yourteam.visionmodule/vision');
 
-  Future<int> startPreview() async {
-    try {
-      final int? textureId = await _channel.invokeMethod<int>('startPreview');
-      if (textureId == null) {
-        throw VisionException('startPreview returned no texture id.');
-      }
-      return textureId;
-    } on PlatformException catch (e) {
-      throw VisionException(
-        e.message ?? 'Failed to start vision preview (${e.code}).',
-      );
-    }
-  }
-
-  Future<void> stopPreview() async {
-    try {
-      await _channel.invokeMethod<void>('stopPreview');
-    } on PlatformException catch (e) {
-      throw VisionException(
-        e.message ?? 'Failed to stop vision preview (${e.code}).',
-      );
-    }
-  }
-
-  Future<Map<dynamic, dynamic>> shoot() async {
+  Future<Map<dynamic, dynamic>> shootFrame({required VisionFrame frame}) async {
     try {
       final Map<dynamic, dynamic>? result =
-          await _channel.invokeMethod<Map<dynamic, dynamic>>('shoot');
+          await _channel.invokeMethod<Map<dynamic, dynamic>>(
+            'shootFrame',
+            frame.toMap(),
+          );
       return result ?? <dynamic, dynamic>{};
     } on PlatformException catch (e) {
-      throw VisionException(e.message ?? 'Shoot failed (${e.code}).');
+      throw VisionException(
+        e.message ?? 'Shoot frame failed (${e.code}).',
+      );
     }
   }
 

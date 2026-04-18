@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -27,13 +28,18 @@ class GamePage extends StatefulWidget {
 }
 
 class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
-  int? _textureId;
+  static const Duration _shootCooldown = Duration(milliseconds: 350);
+
+  CameraController? _cameraController;
+  VisionFrame? _latestFrame;
   String? _error;
   bool _isLoading = true;
   bool _isUnsupported = false;
-  bool _isStartingPreview = false;
+  bool _isStartingCamera = false;
+  bool _isShootInFlight = false;
   bool _hasShownInitialNotifications = false;
   GameCameraPermissionState _permissionState = GameCameraPermissionState.unknown;
+  DateTime _nextAllowedShootAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   final List<GameNotification> _notifications = <GameNotification>[];
   int _nextNotificationId = 0;
@@ -50,13 +56,19 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && _isVisionPlatform && _textureId == null) {
+    if (state == AppLifecycleState.resumed &&
+        _isVisionPlatform &&
+        _cameraController == null) {
       unawaited(_ensurePermissionAndMaybeStartPreview(requestIfNeeded: false));
     }
   }
 
   Future<void> _configureGameScreen() async {
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    await SystemChrome.setPreferredOrientations(<DeviceOrientation>[
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
     await _ensurePermissionAndMaybeStartPreview(requestIfNeeded: true);
   }
 
@@ -126,7 +138,10 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   }
 
   void _showInitialNotificationsIfNeeded() {
-    if (!mounted || _hasShownInitialNotifications || _isUnsupported || _textureId == null) {
+    if (!mounted ||
+        _hasShownInitialNotifications ||
+        _isUnsupported ||
+        _cameraController == null) {
       return;
     }
 
@@ -156,11 +171,11 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
       return;
     }
 
-    if (_textureId != null || _isStartingPreview) {
+    if (_cameraController != null || _isStartingCamera) {
       return;
     }
 
-    _isStartingPreview = true;
+    _isStartingCamera = true;
     if (mounted) {
       setState(() {
         _isLoading = true;
@@ -169,14 +184,31 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
     }
 
     try {
-      final int textureId = await widget.visionManager.startPreview();
+      final List<CameraDescription> cameras = await availableCameras();
+      final CameraDescription camera = cameras.firstWhere(
+        (CameraDescription c) => c.lensDirection == CameraLensDirection.back,
+        orElse: () => cameras.first,
+      );
+
+      final CameraController controller = CameraController(
+        camera,
+        // Higher preset gives less noisy/weird preview on many devices while
+        // still keeping frame-stream processing reasonable.
+        ResolutionPreset.high,
+        enableAudio: false,
+        // Keep YUV for native frame pipeline.
+        imageFormatGroup: ImageFormatGroup.yuv420,
+      );
+      await controller.initialize();
+      await controller.startImageStream(_onCameraImage);
+
       if (!mounted) {
-        await widget.visionManager.stopPreview();
+        await controller.dispose();
         return;
       }
 
       setState(() {
-        _textureId = textureId;
+        _cameraController = controller;
         _isLoading = false;
         _permissionState = GameCameraPermissionState.granted;
       });
@@ -206,12 +238,49 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
         });
       }
     } finally {
-      _isStartingPreview = false;
+      _isStartingCamera = false;
     }
   }
 
   Future<Map<dynamic, dynamic>> shoot() {
-    return widget.visionManager.shoot();
+    final VisionFrame? frame = _latestFrame;
+    if (frame == null) {
+      return Future<Map<dynamic, dynamic>>.value(<dynamic, dynamic>{
+        'result': 'MISS',
+      });
+    }
+    return widget.visionManager.shootFrame(frame: frame);
+  }
+
+  Future<void> _handleShootTap() async {
+    final DateTime now = DateTime.now();
+    if (now.isBefore(_nextAllowedShootAt) || _isShootInFlight) {
+      return;
+    }
+
+    _nextAllowedShootAt = now.add(_shootCooldown);
+    _isShootInFlight = true;
+    try {
+      final Map<dynamic, dynamic> result = await shoot();
+      final String type = result['result']?.toString() ?? 'MISS';
+      switch (type) {
+        case 'HIT':
+          final String target = result['targetId']?.toString() ?? 'TARGET';
+          showGameNotification('HIT: $target', isGreen: true);
+          break;
+        case 'UNKNOWN':
+          showGameNotification('TARGET UNKNOWN', isGreen: false);
+          break;
+        case 'MISS':
+        default:
+          showGameNotification('MISS', isGreen: false);
+          break;
+      }
+    } catch (_) {
+      showGameNotification('SHOOT FAILED', isGreen: false);
+    } finally {
+      _isShootInFlight = false;
+    }
   }
 
   Future<Map<dynamic, dynamic>> registerPlayer({
@@ -269,10 +338,14 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    if (_isVisionPlatform && _textureId != null) {
-      unawaited(widget.visionManager.stopPreview());
+    final CameraController? controller = _cameraController;
+    _cameraController = null;
+    _latestFrame = null;
+    if (_isVisionPlatform && controller != null) {
+      unawaited(controller.dispose());
     }
     unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge));
+    unawaited(SystemChrome.setPreferredOrientations(DeviceOrientation.values));
     super.dispose();
   }
 
@@ -420,8 +493,8 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
       );
     }
 
-    final int? textureId = _textureId;
-    if (textureId == null) {
+    final CameraController? controller = _cameraController;
+    if (controller == null || !controller.value.isInitialized) {
       if (_permissionState == GameCameraPermissionState.denied ||
           _permissionState == GameCameraPermissionState.permanentlyDenied ||
           _permissionState == GameCameraPermissionState.requesting) {
@@ -430,38 +503,71 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
       return const Center(child: Text('Vision preview is not ready.'));
     }
 
-    return Stack(
-      fit: StackFit.expand,
-      children: <Widget>[
-        Texture(textureId: textureId),
-        IgnorePointer(
-          child: Container(
-            decoration: const BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: <Color>[Color(0x44000000), Color(0x55000000)],
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        unawaited(_handleShootTap());
+      },
+      child: Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          CameraPreview(controller),
+          IgnorePointer(
+            child: Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: <Color>[Color(0x44000000), Color(0x55000000)],
+                ),
               ),
             ),
           ),
-        ),
-        const IgnorePointer(child: _ScanlineOverlay()),
-        SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                const _TopHudBar(),
-                const Spacer(),
-                const Spacer(),
-                _NotificationStack(notifications: _notifications),
-              ],
+          const IgnorePointer(child: _ScanlineOverlay()),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  const _TopHudBar(),
+                  const Spacer(),
+                  const Spacer(),
+                  _NotificationStack(notifications: _notifications),
+                ],
+              ),
             ),
           ),
-        ),
-        const IgnorePointer(child: _CrosshairOverlay()),
-      ],
+          const IgnorePointer(child: _CrosshairOverlay()),
+        ],
+      ),
+    );
+  }
+
+  void _onCameraImage(CameraImage image) {
+    final CameraController? controller = _cameraController;
+    if (controller == null || image.planes.isEmpty) {
+      return;
+    }
+
+    if (image.format.group != ImageFormatGroup.yuv420 || image.planes.length < 3) {
+      return;
+    }
+
+    final List<VisionFramePlane> planes = image.planes.map((Plane plane) {
+      return VisionFramePlane(
+        bytes: Uint8List.fromList(plane.bytes),
+        bytesPerRow: plane.bytesPerRow,
+        bytesPerPixel: plane.bytesPerPixel,
+      );
+    }).toList(growable: false);
+
+    _latestFrame = VisionFrame(
+      width: image.width,
+      height: image.height,
+      // No camera rotation compensation from Flutter side.
+      rotationDegrees: 0,
+      planes: planes,
     );
   }
 

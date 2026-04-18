@@ -32,66 +32,10 @@ flutterEngine.plugins.add(VisionFlutterPlugin())
 If the host already uses generated plugin registration, keep that and add `VisionFlutterPlugin` as an extra plugin.
 
 ## Preview flow
-
-Start preview:
-
-```dart
-final int textureId = await _channel.invokeMethod('startPreview');
-```
-
-Render it:
-
-```dart
-Texture(textureId: textureId)
-```
-
-Recommended:
-
-- keep the preview centered
-- keep the crosshair centered over the same widget
-- avoid clipping the texture and crosshair independently
-- prefer wrapping the `Texture` in an `AspectRatio` that matches the preview you want to present to the player
-
-Stop preview:
-
-```dart
-await _channel.invokeMethod('stopPreview');
-```
+Flutter owns camera preview and capture.
+The native plugin no longer starts/stops camera or returns a texture id.
 
 ## Endpoints
-
-### `startPreview`
-
-Request:
-
-- no arguments
-
-Response:
-
-- `int` texture id
-
-Behavior:
-
-- creates a Flutter texture
-- binds CameraX preview + analysis to that texture
-- starts updating the native shoot pipeline frame holder
-- uses the shared native analysis settings from `VisionConfig`:
-  preferred `640 x 480`, `KEEP_ONLY_LATEST`, RGBA output, single background analyzer thread
-
-### `stopPreview`
-
-Request:
-
-- no arguments
-
-Response:
-
-- `null`
-
-Behavior:
-
-- unbinds CameraX
-- releases the texture
 
 ### `registerPlayer`
 
@@ -187,13 +131,32 @@ Behavior:
 
 - merges imported embeddings into the existing in-memory registry
 
-### `shoot`
+### `shootFrame`
 
 Request:
 
 ```dart
-final Map<dynamic, dynamic> result = await _channel.invokeMethod('shoot');
+final Map<dynamic, dynamic> result = await _channel.invokeMethod('shootFrame', {
+  'width': image.width,
+  'height': image.height,
+  'rotationDegrees': rotationDegrees,
+  'planes': image.planes.map((plane) => {
+    'bytes': plane.bytes,
+    'bytesPerRow': plane.bytesPerRow,
+    'bytesPerPixel': plane.bytesPerPixel,
+  }).toList(),
+});
 ```
+
+Arguments:
+
+- `width: int`
+- `height: int`
+- `rotationDegrees: int`
+- `planes: List<Map>`
+  - `bytes: Uint8List`
+  - `bytesPerRow: int`
+  - `bytesPerPixel: int?`
 
 Response variants:
 
@@ -243,28 +206,25 @@ Behavior:
 
 - `imageBytes` must be JPEG-encoded `Uint8List` values
 - registrations live only in native memory until you export and persist/share the returned JSON
-- `shoot` depends on the latest analyzed frame, so call `startPreview` before attempting `shoot`
-- the native side assumes the gameplay crosshair is visually centered over the preview widget
+- `shootFrame` expects Android `YUV_420_888` planes from the Flutter camera stream
+- the plugin evaluates all detected people in the frame and performs identity matching
 
 ## Expected Flutter-side data types
 
-- `textureId`: `int`
 - `imageBytes`: `List<Uint8List>`
 - JSON import/export payloads: `String`
+- shoot frame payload: `Map`
 - shoot result: `Map`
 
 ## Assumptions
 
-- Flutter draws the crosshair centered over the `Texture` widget.
-- The native plugin currently uses the preview texture plus a native analysis frame holder for shoot logic.
+- Flutter owns camera preview and feeds frame payloads to the plugin on shoot.
 - Registrations are stored only in memory unless Flutter exports and persists the JSON itself.
 
 ## Suggested usage order
 
-1. Call `startPreview`
-2. Render the returned `Texture`
-3. Register the local player from several JPEGs
-4. Exchange exported embeddings with other players
-5. Import received embeddings
-6. Call `shoot` whenever the player fires
-7. Call `stopPreview` when leaving the vision screen
+1. Start Flutter camera preview in your game screen
+2. Register the local player from several JPEGs
+3. Exchange exported embeddings with other players
+4. Import received embeddings
+5. On each shot, pass the latest camera frame to `shootFrame`

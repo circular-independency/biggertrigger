@@ -20,7 +20,7 @@ The shared vision flow is:
 - `app/src/main/java/com/example/triggerroyale/MainActivity.kt`
   Native test harness used to validate the vision loop without Flutter.
 - `app/src/main/java/com/example/triggerroyale/VisionFlutterPlugin.kt`
-  Flutter plugin entrypoint that exposes texture preview, registration, import/export, and `shoot()` through a method channel.
+  Flutter plugin entrypoint that exposes frame-based shoot processing, registration, and import/export through a method channel.
 - `app/src/main/java/com/example/triggerroyale/AppLifecycleOwner.kt`
   Minimal always-resumed lifecycle owner used when the plugin is initialized from an application context instead of an `Activity`.
 - `app/src/main/java/com/example/triggerroyale/CrosshairOverlayView.kt`
@@ -74,10 +74,9 @@ Why this path exists:
 
 ### Flutter plugin (`VisionFlutterPlugin`)
 
-- binds `Preview` and `ImageAnalysis`
-- renders `Preview` into a Flutter texture
-- keeps the latest upright analysis bitmap in `FrameHolder`
-- runs the native `shoot()` pipeline from that stored frame
+- receives Flutter camera frames (`YUV_420_888` planes) on `shootFrame`
+- converts them to upright bitmaps
+- runs native detection + matching only when shoot is requested
 
 Current plugin `ImageAnalysis` settings:
 
@@ -234,7 +233,7 @@ There are two important coordinate spaces:
 
 `CoordinateMapper` exists so overlay rendering and hit-testing can stay correct when those spaces differ because of scaling or cropping.
 
-The current native test harness often stays close to a single visible space because it captures `PreviewView.bitmap`, but the plugin path uses a proper analysis bitmap and preview texture, so keeping mapping logic centralized is still the right long-term design.
+The current native test harness often stays close to a single visible space because it captures `PreviewView.bitmap`, while the plugin path now receives Flutter-provided camera frames and processes them on demand.
 
 ## Crop extraction and blur rejection
 
@@ -292,13 +291,11 @@ Channel name:
 
 Exposed methods:
 
-- `startPreview() -> Long textureId`
-- `stopPreview() -> null`
+- `shootFrame({width,height,rotationDegrees,planes}) -> { result, targetId?, confidence? }`
 - `registerPlayer({ playerId, imageBytes }) -> { storedCount }`
 - `exportEmbeddings({ playerId }) -> String`
 - `exportAll() -> String`
 - `importEmbeddings({ json }) -> null`
-- `shoot() -> { result, targetId?, confidence? }`
 - `clearRegistrations() -> null`
 
 Plugin registration:

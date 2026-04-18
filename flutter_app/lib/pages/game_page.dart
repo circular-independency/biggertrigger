@@ -57,10 +57,6 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
 
   Future<void> _configureGameScreen() async {
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-    await SystemChrome.setPreferredOrientations(<DeviceOrientation>[
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
     await _ensurePermissionAndMaybeStartPreview(requestIfNeeded: true);
   }
 
@@ -277,7 +273,6 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
       unawaited(widget.visionManager.stopPreview());
     }
     unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge));
-    unawaited(SystemChrome.setPreferredOrientations(DeviceOrientation.values));
     super.dispose();
   }
 

@@ -108,10 +108,10 @@ class LobbyManager {
     }
   }
 
-  void setReady() {
+  void setReady({bool notifySocket = true}) {
     _status = LobbyStatus.active;
     final SocketManager? socketManager = _socketManager;
-    if (socketManager != null) {
+    if (notifySocket && socketManager != null) {
       unawaited(socketManager.sendReady(ready: true));
     }
 

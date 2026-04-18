@@ -301,13 +301,22 @@ class _LobbyPageState extends State<LobbyPage> {
     final String playerId = storedUsername.isEmpty ? 'COMMANDER_01' : storedUsername;
 
     try {
-      final playerEmbedings = await widget.visionManager.registerPlayer(
+      final Map<dynamic, dynamic> registration = await widget.visionManager.registerPlayer(
         playerId: playerId,
         imageBytes: List<Uint8List>.unmodifiable(_registrationImages),
       );
 
-      //TODO: send to socket
+      final dynamic playerEmbedding = registration['playerEmbedding'];
+      if (playerEmbedding is! Map) {
+        throw StateError('Missing playerEmbedding in register response.');
+      }
 
+      final dynamic rawEmbeddings = playerEmbedding['embeddings'];
+      if (rawEmbeddings is! List) {
+        throw StateError('Missing embeddings list in register response.');
+      }
+
+      await widget.socketManager.sendEmbedding(embeddings: rawEmbeddings);
     } catch (error) {
       if (!_isActiveRegistrationSession(token)) {
         return;
@@ -324,7 +333,7 @@ class _LobbyPageState extends State<LobbyPage> {
     }
 
     setState(() {
-      widget.lobbyManager.setReady();
+      widget.lobbyManager.setReady(notifySocket: false);
       _registrationStage = null;
       _registrationError = null;
       _registrationCountdown = 3;

@@ -112,7 +112,12 @@ class SocketManager {
   }
 
   Future<String> _getUsername() async {
-    _username ??= await UserPreferencesManager.getUsername() ?? '';
+    if (_username != null && _username!.trim().isNotEmpty) {
+      return _username!;
+    }
+
+    final String stored = (await UserPreferencesManager.getUsername())?.trim() ?? '';
+    _username = stored.isEmpty ? 'COMMANDER_01' : stored;
     return _username!;
   }
 
@@ -122,6 +127,18 @@ class SocketManager {
       'type': 'ready',
       'username': username,
       'ready': ready,
+    });
+    send(message);
+  }
+
+  Future<void> sendEmbedding({
+    required List<dynamic> embeddings,
+  }) async {
+    final String username = await _getUsername();
+    final String message = jsonEncode(<String, dynamic>{
+      'type': 'embedding',
+      'username': username,
+      'embeddings': embeddings,
     });
     send(message);
   }

@@ -51,7 +51,8 @@ async def handler(ws):
                     "ws": ws,
                     "hp": 100,
                     "alive": True,
-                    "ready": False
+                    "ready": False,
+                    "embeddings": []
                 }
                 print("joined:", username)
                 print("all users:", users.keys())
@@ -65,6 +66,16 @@ async def handler(ws):
                 print("is ready:", username)
                 
                 await broadcast()
+
+            if data["type"] == "embedding":
+                username = data["username"]
+                embeddings = data.get("embeddings", [])
+
+                if username in users:
+                    users[username]["embeddings"] = embeddings
+                    users[username]["ready"] = True
+                    print(f"embeddings received: {username}, count={len(embeddings)}")
+                    await broadcast()
             
             if data["type"] == "shoot":
                 shooter_ws = ws

@@ -161,7 +161,17 @@ class VisionFlutterPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
                     PlayerRegistry.register(playerId, bitmaps)
                 }
 
-                result.success(mapOf("storedCount" to playerEmbedding.embeddings.size))
+                result.success(
+                    mapOf(
+                        "playerEmbedding" to mapOf(
+                            "playerId" to playerEmbedding.playerId,
+                            "embeddings" to playerEmbedding.embeddings.map { embedding ->
+                                embedding.map { value -> value.toDouble() }
+                            }
+                        ),
+                        "storedCount" to playerEmbedding.embeddings.size
+                    )
+                )
             } catch (exception: IllegalArgumentException) {
                 result.error("REGISTRATION_FAILED", exception.message, null)
             } catch (exception: Exception) {

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Lobby</title>
+</head>
+<body>
+
+<div id="login">
+  <input id="name" placeholder="Username">
+  <button onclick="join()">Join</button>
+</div>
+
+<div id="lobby" style="display:none;">
+  <h2>Connected Users</h2>
+  <ul id="users"></ul>
+</div>
+
+<script>
+const ws = new WebSocket("ws://localhost:8765");
+
+ws.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+
+  if (data.type === "users") {
+    const list = document.getElementById("users");
+    list.innerHTML = "";
+
+    Object.entries(data.data).forEach(([name, info]) => {
+      const li = document.createElement("li");
+
+      const btn = document.createElement("button");
+      btn.textContent = `${name} (HP: ${info.hp}) (ALIVE: ${info.alive})`;
+
+      btn.onclick = () => shoot(name);
+
+      li.appendChild(btn);
+      list.appendChild(li);
+    });
+  }
+
+  if (data.type === "hit") {
+    alert(`${data.from} shot you!`);
+  }
+};
+
+function join() {
+  const username = document.getElementById("name").value;
+
+  ws.send(JSON.stringify({
+    type: "join",
+    username: username
+  }));
+
+  document.getElementById("login").style.display = "none";
+  document.getElementById("lobby").style.display = "block";
+}
+
+function shoot(shot_user) {
+    console.log(shot_user)
+    ws.send(JSON.stringify({
+        type: "shoot",
+        user: shot_user
+    }))
+}
+</script>
+
+</body>
+</html>

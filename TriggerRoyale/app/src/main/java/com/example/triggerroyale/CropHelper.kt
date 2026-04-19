@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.RectF
 import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.max
 
 /**
  * Utility functions for extracting and validating person crops.
@@ -34,6 +35,29 @@ object CropHelper {
 
         return Bitmap.createBitmap(source, left, top, right - left, bottom - top)
     }
+
+    /**
+     * Creates a downsampled version of a crop while preserving aspect ratio.
+     *
+     * If the source crop is already smaller than [targetLongEdgePx], the original bitmap is
+     * returned unchanged (no upscaling).
+     */
+    fun downsampleCropForRegistration(source: Bitmap, targetLongEdgePx: Int): Bitmap {
+        if (targetLongEdgePx <= 0) {
+            return source
+        }
+
+        val currentLongEdge = max(source.width, source.height)
+        if (currentLongEdge <= targetLongEdgePx) {
+            return source
+        }
+
+        val scale = targetLongEdgePx.toFloat() / currentLongEdge.toFloat()
+        val targetWidth = max(1, (source.width * scale).toInt())
+        val targetHeight = max(1, (source.height * scale).toInt())
+        return Bitmap.createScaledBitmap(source, targetWidth, targetHeight, true)
+    }
+
 
     /**
      * Rejects blurry crops using a simple manually computed Laplacian variance score.

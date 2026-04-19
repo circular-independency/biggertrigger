@@ -10,6 +10,27 @@ object VisionConfig {
     /** Radius in pixels around frame center treated as crosshair hit zone. */
     const val crosshairRadiusPx = 60f
 
+    /**
+     * When enabled, registration stores an additional embedding from a downsampled person crop.
+     *
+     * This helps matching distant/small targets by adding low-detail examples to the registry.
+     */
+    const val enableDownsampledRegistrationEmbedding = true
+
+    /**
+     * Target long-edge size (in pixels) for registration downsample embedding variant.
+     *
+     * The crop keeps its aspect ratio and is only scaled down (never upscaled).
+     */
+    const val registrationDownsampleLongEdgePx = 96
+
+    /**
+     * Target long-edge size (in pixels) for the second registration downsample pass.
+     *
+     * This should be smaller than [registrationDownsampleLongEdgePx].
+     */
+    const val registrationSecondDownsampleLongEdgePx = 64
+
     /** Preferred ImageAnalysis width used by the Flutter plugin preview pipeline. */
     const val analysisWidth = 640
 

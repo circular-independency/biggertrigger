@@ -53,6 +53,33 @@ object PlayerRegistry {
             }
 
             collectedEmbeddings += imageEmbedderHelper.embed(crop)
+
+            if (VisionConfig.enableDownsampledRegistrationEmbedding) {
+                val downsampledCropPass1 = CropHelper.downsampleCropForRegistration(
+                    source = crop,
+                    targetLongEdgePx = VisionConfig.registrationDownsampleLongEdgePx
+                )
+                val pass1WasDownsampled =
+                    downsampledCropPass1.width != crop.width ||
+                        downsampledCropPass1.height != crop.height
+                if (pass1WasDownsampled) {
+                    collectedEmbeddings += imageEmbedderHelper.embed(downsampledCropPass1)
+
+                    val downsampledCropPass2 = CropHelper.downsampleCropForRegistration(
+                        source = downsampledCropPass1,
+                        targetLongEdgePx = VisionConfig.registrationSecondDownsampleLongEdgePx
+                    )
+                    val pass2WasDownsampled =
+                        downsampledCropPass2.width != downsampledCropPass1.width ||
+                            downsampledCropPass2.height != downsampledCropPass1.height
+                    if (pass2WasDownsampled) {
+                        collectedEmbeddings += imageEmbedderHelper.embed(downsampledCropPass2)
+                        downsampledCropPass2.recycle()
+                    }
+
+                    downsampledCropPass1.recycle()
+                }
+            }
         }
 
         if (collectedEmbeddings.isEmpty()) {

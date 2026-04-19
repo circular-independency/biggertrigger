@@ -66,6 +66,7 @@ flutter:
   assets:
     - assets/audio/button.mp3
     - assets/audio/deny.mp3
+    - assets/audio/laser.wav
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

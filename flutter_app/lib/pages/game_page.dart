@@ -418,6 +418,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
 
     _nextAllowedShootAt = now.add(_shootCooldown);
     _isShootInFlight = true;
+    unawaited(SoundManager.playLaser());
     try {
       final Map<dynamic, dynamic> result = await shoot();
       final String type = result['result']?.toString() ?? 'MISS';
@@ -607,6 +608,27 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
     return shouldQuit ?? false;
   }
 
+  Future<void> _quitToHome() async {
+    final SocketManager? socketManager = _socketManager;
+    if (socketManager != null && socketManager.isConnected) {
+      try {
+        await socketManager.disconnect();
+      } catch (_) {
+        // Best-effort disconnect before returning home.
+      }
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    Navigator.pushNamedAndRemoveUntil(
+      context,
+      DragonHackApp.mainMenuRoute,
+      (Route<dynamic> route) => false,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return PopScope(
@@ -618,7 +640,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
 
         final bool shouldQuit = await _confirmExit();
         if (shouldQuit && context.mounted) {
-          Navigator.of(context).pop();
+          await _quitToHome();
         }
       },
       child: Scaffold(

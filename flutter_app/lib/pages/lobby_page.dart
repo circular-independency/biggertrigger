@@ -37,7 +37,7 @@ class LobbyPage extends StatefulWidget {
 }
 
 class _LobbyPageState extends State<LobbyPage> {
-  static const int _totalRegistrationShots = 2;
+  static const int _totalRegistrationShots = 8;
 
   bool _isConnecting = true;
   bool _didNavigateAway = false;

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
@@ -71,6 +72,8 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   String _currentUsername = 'COMMANDER_01';
   int _currentHp = 100;
   bool _didHandleDeath = false;
+  bool _isRegistrySyncing = false;
+  String? _registrySyncError;
   StreamSubscription<Map<String, SocketLobbyUser>>? _usersSubscription;
   bool _showDamageFlash = false;
   Timer? _damageFlashTimer;
@@ -82,6 +85,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     _applyStartData(widget.startData);
+    unawaited(_syncVisionRegistryFromStartData());
     _attachSocketListeners();
     unawaited(SoundManager.playDeny());
     WidgetsBinding.instance.addObserver(this);
@@ -108,6 +112,43 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
         ? 'COMMANDER_01'
         : startData.currentUsername.trim();
     _currentHp = (startData.healthByPlayer[_currentUsername] ?? 100).clamp(0, 100);
+  }
+
+  Future<void> _syncVisionRegistryFromStartData() async {
+    if (_isRegistrySyncing || _playerEmbeddingsByName.isEmpty) {
+      return;
+    }
+
+    _isRegistrySyncing = true;
+    _registrySyncError = null;
+    try {
+      // Do not keep local player's vectors in the runtime match registry,
+      // otherwise self-recognition dominates and every hit resolves to self.
+      final Map<String, List<List<double>>> remotePlayers =
+          <String, List<List<double>>>{};
+      _playerEmbeddingsByName.forEach((String playerId, List<List<double>> vectors) {
+        if (playerId == _currentUsername) {
+          return;
+        }
+        if (vectors.isNotEmpty) {
+          remotePlayers[playerId] = vectors;
+        }
+      });
+
+      await widget.visionManager.clearRegistrations();
+      if (remotePlayers.isNotEmpty) {
+        await widget.visionManager.importEmbeddings(
+          json: jsonEncode(remotePlayers),
+        );
+      }
+    } catch (error) {
+      _registrySyncError = error.toString();
+      if (mounted) {
+        showGameNotification('EMBEDDING SYNC FAILED', isGreen: false);
+      }
+    } finally {
+      _isRegistrySyncing = false;
+    }
   }
 
   void _attachSocketListeners() {
@@ -288,14 +329,23 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
     _hasShownInitialNotifications = true;
     showGameNotification('SECURE_LINK_ESTABLISHED', isGreen: true);
     if (_playerIds.isNotEmpty) {
-      final int totalVectors = _playerEmbeddingsByName.values.fold<int>(
+      final Iterable<MapEntry<String, List<List<double>>>> remotePlayers =
+          _playerEmbeddingsByName.entries.where(
+            (MapEntry<String, List<List<double>>> e) =>
+                e.key != _currentUsername,
+          );
+      final int totalVectors = remotePlayers.fold<int>(
         0,
-        (int sum, List<List<double>> vectors) => sum + vectors.length,
+        (int sum, MapEntry<String, List<List<double>>> e) =>
+            sum + e.value.length,
       );
+      final int remotePlayerCount = remotePlayers.length;
       Future<void>.delayed(const Duration(milliseconds: 450), () {
         if (mounted) {
           showGameNotification(
-            'EMBEDDINGS_SYNCED: ${_playerIds.length} OPS / $totalVectors VECTORS',
+            _registrySyncError == null
+                ? 'TARGET DB: $remotePlayerCount OPS / $totalVectors VECTORS'
+                : 'TARGET DB SYNC ISSUE',
             isGreen: true,
           );
         }
@@ -408,6 +458,10 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
 
   Future<void> _handleShootTap() async {
     if (_currentHp <= 0) {
+      return;
+    }
+    if (_isRegistrySyncing) {
+      showGameNotification('SYNCING TARGET DB', isGreen: false);
       return;
     }
 

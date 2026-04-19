@@ -176,6 +176,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
       });
     }
     if (nextHp < previousHp) {
+      unawaited(SoundManager.playHurt());
       _triggerDamageFlash();
     }
 

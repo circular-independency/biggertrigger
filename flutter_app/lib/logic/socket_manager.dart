@@ -145,6 +145,7 @@ class SocketManager {
 
           embeddingsByUser[key] = parsedEmbeddings;
         });
+
         rawHealth.forEach((dynamic key, dynamic value) {
           if (key is! String || value is! num) {
             return;

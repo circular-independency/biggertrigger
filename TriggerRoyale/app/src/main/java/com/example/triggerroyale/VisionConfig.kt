@@ -46,7 +46,8 @@ object VisionConfig {
      * Developer action required: this file must be added manually to:
      * `app/src/main/assets/mobilenet_v3_small.tflite`
      */
-    const val embedderModelAssetPath = "mobilenet_v3_small.tflite"
+    //const val embedderModelAssetPath = "mobilenet_v3_small.tflite"
+    const val embedderModelAssetPath = "mobilenet_v3_large.tflite"
 
     /** Maximum number of detections MediaPipe should return for a single image. */
     const val detectorMaxResults = 10

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
@@ -71,7 +72,10 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   String _currentUsername = 'COMMANDER_01';
   int _currentHp = 100;
   bool _didHandleDeath = false;
+  bool _isRegistrySyncing = false;
+  String? _registrySyncError;
   StreamSubscription<Map<String, SocketLobbyUser>>? _usersSubscription;
+  StreamSubscription<SocketKillPayload>? _killSubscription;
   bool _showDamageFlash = false;
   Timer? _damageFlashTimer;
 
@@ -82,6 +86,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     _applyStartData(widget.startData);
+    unawaited(_syncVisionRegistryFromStartData());
     _attachSocketListeners();
     unawaited(SoundManager.playDeny());
     WidgetsBinding.instance.addObserver(this);
@@ -110,6 +115,43 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
     _currentHp = (startData.healthByPlayer[_currentUsername] ?? 100).clamp(0, 100);
   }
 
+  Future<void> _syncVisionRegistryFromStartData() async {
+    if (_isRegistrySyncing || _playerEmbeddingsByName.isEmpty) {
+      return;
+    }
+
+    _isRegistrySyncing = true;
+    _registrySyncError = null;
+    try {
+      // Do not keep local player's vectors in the runtime match registry,
+      // otherwise self-recognition dominates and every hit resolves to self.
+      final Map<String, List<List<double>>> remotePlayers =
+          <String, List<List<double>>>{};
+      _playerEmbeddingsByName.forEach((String playerId, List<List<double>> vectors) {
+        if (playerId == _currentUsername) {
+          return;
+        }
+        if (vectors.isNotEmpty) {
+          remotePlayers[playerId] = vectors;
+        }
+      });
+
+      await widget.visionManager.clearRegistrations();
+      if (remotePlayers.isNotEmpty) {
+        await widget.visionManager.importEmbeddings(
+          json: jsonEncode(remotePlayers),
+        );
+      }
+    } catch (error) {
+      _registrySyncError = error.toString();
+      if (mounted) {
+        showGameNotification('EMBEDDING SYNC FAILED', isGreen: false);
+      }
+    } finally {
+      _isRegistrySyncing = false;
+    }
+  }
+
   void _attachSocketListeners() {
     final SocketManager? socketManager = _socketManager;
     if (socketManager == null) {
@@ -118,6 +160,9 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
 
     _usersSubscription = socketManager.usersUpdates.listen(
       _handleUsersUpdate,
+    );
+    _killSubscription = socketManager.killUpdates.listen(
+      _handleKillUpdate,
     );
   }
 
@@ -135,12 +180,24 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
       });
     }
     if (nextHp < previousHp) {
+      unawaited(SoundManager.playHurt());
       _triggerDamageFlash();
     }
 
     if (!me.alive || nextHp <= 0) {
       _handleDeath();
     }
+  }
+
+  void _handleKillUpdate(SocketKillPayload payload) {
+    if (!mounted || payload.killedUser.trim().isEmpty) {
+      return;
+    }
+    showGameNotification(
+      '${payload.killedUser} got killed',
+      isGreen: true,
+      accentColor: CyberColors.cyan,
+    );
   }
 
   void _triggerDamageFlash() {
@@ -288,14 +345,23 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
     _hasShownInitialNotifications = true;
     showGameNotification('SECURE_LINK_ESTABLISHED', isGreen: true);
     if (_playerIds.isNotEmpty) {
-      final int totalVectors = _playerEmbeddingsByName.values.fold<int>(
+      final Iterable<MapEntry<String, List<List<double>>>> remotePlayers =
+          _playerEmbeddingsByName.entries.where(
+            (MapEntry<String, List<List<double>>> e) =>
+                e.key != _currentUsername,
+          );
+      final int totalVectors = remotePlayers.fold<int>(
         0,
-        (int sum, List<List<double>> vectors) => sum + vectors.length,
+        (int sum, MapEntry<String, List<List<double>>> e) =>
+            sum + e.value.length,
       );
+      final int remotePlayerCount = remotePlayers.length;
       Future<void>.delayed(const Duration(milliseconds: 450), () {
         if (mounted) {
           showGameNotification(
-            'EMBEDDINGS_SYNCED: ${_playerIds.length} OPS / $totalVectors VECTORS',
+            _registrySyncError == null
+                ? 'TARGET DB: $remotePlayerCount OPS / $totalVectors VECTORS'
+                : 'TARGET DB SYNC ISSUE',
             isGreen: true,
           );
         }
@@ -410,6 +476,10 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
     if (_currentHp <= 0) {
       return;
     }
+    if (_isRegistrySyncing) {
+      showGameNotification('SYNCING TARGET DB', isGreen: false);
+      return;
+    }
 
     final DateTime now = DateTime.now();
     if (now.isBefore(_nextAllowedShootAt) || _isShootInFlight) {
@@ -429,7 +499,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
           showGameNotification('HIT: $target', isGreen: true);
           break;
         case 'UNKNOWN':
-          showGameNotification('TARGET UNKNOWN', isGreen: false);
+          showGameNotification('SHOT BLOCKED', isGreen: false);
           break;
         case 'MISS':
         default:
@@ -469,11 +539,17 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
     return widget.visionManager.clearRegistrations();
   }
 
-  void showGameNotification(String message, {required bool isGreen}) {
+  void showGameNotification(
+    String message, {
+    required bool isGreen,
+    Color? accentColor,
+  }) {
+    final Color resolvedAccentColor = accentColor ??
+        (isGreen ? CyberColors.lime : const Color(0xFFFF4C52));
     final GameNotification notification = GameNotification(
       id: _nextNotificationId++,
       message: message,
-      isGreen: isGreen,
+      accentColor: resolvedAccentColor,
       createdAt: DateTime.now(),
     );
 
@@ -499,6 +575,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _usersSubscription?.cancel();
+    _killSubscription?.cancel();
     _damageFlashTimer?.cancel();
     final CameraController? controller = _cameraController;
     _cameraController = null;
@@ -878,13 +955,13 @@ class GameNotification {
   const GameNotification({
     required this.id,
     required this.message,
-    required this.isGreen,
+    required this.accentColor,
     required this.createdAt,
   });
 
   final int id;
   final String message;
-  final bool isGreen;
+  final Color accentColor;
   final DateTime createdAt;
 }
 
@@ -1000,7 +1077,7 @@ class _NotificationCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Color accent = notification.isGreen ? CyberColors.lime : const Color(0xFFFF4C52);
+    final Color accent = notification.accentColor;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 6),

@@ -12,6 +12,7 @@ import '../components/lobby_mission_card.dart';
 import '../components/lobby_operatives_panel.dart';
 import '../components/lobby_registration_overlay.dart';
 import '../logic/lobby_manager.dart';
+import '../logic/sound_manager.dart';
 import '../logic/socket_manager.dart';
 import '../logic/user_preferences_manager.dart';
 import '../logic/vision_manager.dart';
@@ -329,7 +330,7 @@ class _LobbyPageState extends State<LobbyPage> {
       try {
         final XFile shot = await controller.takePicture();
         final Uint8List bytes = await shot.readAsBytes();
-        unawaited(SystemSound.play(SystemSoundType.click));
+        unawaited(SoundManager.playDeny());
         if (!_isActiveRegistrationSession(token)) {
           return;
         }

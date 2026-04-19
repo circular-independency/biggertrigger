@@ -32,7 +32,7 @@ class DeployPanel extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                Text('DEPLOY', style: CyberText.title),
+                Text('BATTLE', style: CyberText.title),
                 const SizedBox(height: 12),
                 Row(
                   mainAxisSize: MainAxisSize.min,

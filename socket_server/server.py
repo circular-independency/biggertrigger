@@ -68,6 +68,8 @@ def shoot_player(shooter_name, shot_name):
         users[shot_name]["hp"] -= SHOT_DAMAGE
         if users[shot_name]["hp"] <= 0:
             kill_player(shot_name)
+            return True
+    return False
 
 def kill_player(killed_name):
     users[killed_name]["alive"] = False
@@ -133,7 +135,17 @@ async def handler(ws):
                     }))
 
                     print(f"{target_name} was shot by {shooter}")
-                    shoot_player(shooter, target_name)
+                    was_killed = shoot_player(shooter, target_name)
+                    if was_killed:
+                        kill_msg = json.dumps({
+                            "type": "kill",
+                            "killed": target_name,
+                            "by": shooter
+                        })
+                        await asyncio.gather(*[
+                            player["ws"].send(kill_msg)
+                            for player in users.values()
+                        ])
                     await broadcast()
     except ConnectionClosed as exc:
         user_label = username if username else "unknown-user"

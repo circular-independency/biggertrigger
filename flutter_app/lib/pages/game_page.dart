@@ -75,6 +75,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   bool _isRegistrySyncing = false;
   String? _registrySyncError;
   StreamSubscription<Map<String, SocketLobbyUser>>? _usersSubscription;
+  StreamSubscription<SocketKillPayload>? _killSubscription;
   bool _showDamageFlash = false;
   Timer? _damageFlashTimer;
 
@@ -160,6 +161,9 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
     _usersSubscription = socketManager.usersUpdates.listen(
       _handleUsersUpdate,
     );
+    _killSubscription = socketManager.killUpdates.listen(
+      _handleKillUpdate,
+    );
   }
 
   void _handleUsersUpdate(Map<String, SocketLobbyUser> users) {
@@ -183,6 +187,17 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
     if (!me.alive || nextHp <= 0) {
       _handleDeath();
     }
+  }
+
+  void _handleKillUpdate(SocketKillPayload payload) {
+    if (!mounted || payload.killedUser.trim().isEmpty) {
+      return;
+    }
+    showGameNotification(
+      '${payload.killedUser} got killed',
+      isGreen: true,
+      accentColor: CyberColors.cyan,
+    );
   }
 
   void _triggerDamageFlash() {
@@ -524,11 +539,17 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
     return widget.visionManager.clearRegistrations();
   }
 
-  void showGameNotification(String message, {required bool isGreen}) {
+  void showGameNotification(
+    String message, {
+    required bool isGreen,
+    Color? accentColor,
+  }) {
+    final Color resolvedAccentColor = accentColor ??
+        (isGreen ? CyberColors.lime : const Color(0xFFFF4C52));
     final GameNotification notification = GameNotification(
       id: _nextNotificationId++,
       message: message,
-      isGreen: isGreen,
+      accentColor: resolvedAccentColor,
       createdAt: DateTime.now(),
     );
 
@@ -554,6 +575,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _usersSubscription?.cancel();
+    _killSubscription?.cancel();
     _damageFlashTimer?.cancel();
     final CameraController? controller = _cameraController;
     _cameraController = null;
@@ -933,13 +955,13 @@ class GameNotification {
   const GameNotification({
     required this.id,
     required this.message,
-    required this.isGreen,
+    required this.accentColor,
     required this.createdAt,
   });
 
   final int id;
   final String message;
-  final bool isGreen;
+  final Color accentColor;
   final DateTime createdAt;
 }
 
@@ -1055,7 +1077,7 @@ class _NotificationCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final Color accent = notification.isGreen ? CyberColors.lime : const Color(0xFFFF4C52);
+    final Color accent = notification.accentColor;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 6),

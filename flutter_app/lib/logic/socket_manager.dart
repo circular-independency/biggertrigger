@@ -36,6 +36,16 @@ class SocketStartPayload {
   final Map<String, int> healthByUser;
 }
 
+class SocketKillPayload {
+  const SocketKillPayload({
+    required this.killedUser,
+    required this.killerUser,
+  });
+
+  final String killedUser;
+  final String killerUser;
+}
+
 class SocketManager {
   SocketManager({SocketChannelFactory? channelFactory, String? socketUrlIn})
     : _channelFactory = channelFactory ?? _defaultChannelFactory,
@@ -54,6 +64,8 @@ class SocketManager {
       StreamController<Map<String, SocketLobbyUser>>.broadcast();
   final StreamController<SocketStartPayload> _startController =
       StreamController<SocketStartPayload>.broadcast();
+  final StreamController<SocketKillPayload> _killController =
+      StreamController<SocketKillPayload>.broadcast();
 
   StreamSubscription<dynamic>? _subscription;
   SocketChannel? _channel;
@@ -65,6 +77,7 @@ class SocketManager {
 
   Stream<Map<String, SocketLobbyUser>> get usersUpdates => _usersController.stream;
   Stream<SocketStartPayload> get startUpdates => _startController.stream;
+  Stream<SocketKillPayload> get killUpdates => _killController.stream;
 
   void handleData(String strData) {
     final dynamic decoded = jsonDecode(strData);
@@ -101,6 +114,19 @@ class SocketManager {
       case 'hit':
         final String hitter = decoded['from']?.toString() ?? 'Unknown';
         _messagesController.add('[$hitter] hit you');
+        break;
+      case 'kill':
+        final String killedUser = decoded['killed']?.toString() ?? '';
+        final String killerUser = decoded['by']?.toString() ?? '';
+        if (killedUser.isEmpty) {
+          return;
+        }
+        _killController.add(
+          SocketKillPayload(
+            killedUser: killedUser,
+            killerUser: killerUser,
+          ),
+        );
         break;
       case 'start':
         final dynamic rawEmbeddings = decoded['embeddings'];
@@ -303,6 +329,7 @@ class SocketManager {
     await _messagesController.close();
     await _usersController.close();
     await _startController.close();
+    await _killController.close();
   }
 
   static SocketChannel _defaultChannelFactory(Uri uri) {

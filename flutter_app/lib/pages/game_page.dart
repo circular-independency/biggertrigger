@@ -499,7 +499,7 @@ class _GamePageState extends State<GamePage> with WidgetsBindingObserver {
           showGameNotification('HIT: $target', isGreen: true);
           break;
         case 'UNKNOWN':
-          showGameNotification('TARGET UNKNOWN', isGreen: false);
+          showGameNotification('SHOT BLOCKED', isGreen: false);
           break;
         case 'MISS':
         default:

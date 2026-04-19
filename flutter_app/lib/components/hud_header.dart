@@ -9,7 +9,7 @@ class HudHeader extends StatelessWidget {
   const HudHeader({
     super.key,
     required this.onSettingsTap,
-    this.systemName = 'KINETIC_OS // V2.4',
+    this.systemName = 'TRIGGER ROYALE // V2.4',
     this.signal = '[SIG_STR: 98%]',
     this.signalLabel,
     this.signalValue,

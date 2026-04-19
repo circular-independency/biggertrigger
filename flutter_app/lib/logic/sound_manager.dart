@@ -6,7 +6,7 @@ class SoundManager {
   static const double _buttonVolume = 0.55;
   static const double _denyVolume = 0.55;
   static const double _laserVolume = 0.95;
-  static const double _hurtVolume = 0.75;
+  static const double _hurtVolume = 0.95;
 
   static final AudioPlayer _buttonPlayer = AudioPlayer(playerId: 'button_sfx')
     ..setReleaseMode(ReleaseMode.stop);

@@ -60,7 +60,7 @@ object VisionConfig {
      *
      * Lower values make matching more permissive. Higher values make matching stricter.
      */
-    const val matchThreshold = 0.30f
+    const val matchThreshold = 0.15f
 
     /**
      * Enables blur rejection for extracted crops.

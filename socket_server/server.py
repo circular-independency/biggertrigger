@@ -64,11 +64,18 @@ async def maybe_start_match():
     ])
 
 def shoot_player(shooter_name, shot_name):
-    if shooter_name != shot_name and users[shot_name]["alive"] == True:
-        users[shot_name]["hp"] -= SHOT_DAMAGE
-        if users[shot_name]["hp"] <= 0:
-            kill_player(shot_name)
-            return True
+    if (
+        shooter_name is None
+        or shot_name not in users
+        or shooter_name == shot_name
+        or not users[shot_name]["alive"]
+    ):
+        return False
+
+    users[shot_name]["hp"] -= SHOT_DAMAGE
+    if users[shot_name]["hp"] <= 0:
+        kill_player(shot_name)
+        return True
     return False
 
 def kill_player(killed_name):
@@ -125,6 +132,14 @@ async def handler(ws):
                     if d["ws"] == shooter_ws:
                         shooter = name
                         break
+
+                if (
+                    shooter is None
+                    or target_name not in users
+                    or shooter == target_name
+                    or not users[target_name]["alive"]
+                ):
+                    continue
 
                 target_ws = users[target_name]["ws"]
 
